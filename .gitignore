@@ -216,3 +216,23 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ---------------------------------------------------------------------------
+# DemoBuilder additions
+# ---------------------------------------------------------------------------
+
+# Node / frontend
+node_modules/
+frontend/dist/
+frontend/.env.local
+*.local
+.vite/
+*.tsbuildinfo
+
+# SQLite checkpoint files generated at runtime (LangGraph checkpointer)
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+backend/app/data/checkpoints.sqlite*

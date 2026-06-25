@@ -1,0 +1,5 @@
+# Dev/test dependencies. Install with:
+#   .venv\Scripts\pip install -r backend/requirements-dev.txt
+# Then run the suite from the repo root with:  pytest backend/tests
+-r requirements.txt
+pytest>=8.0,<9.0

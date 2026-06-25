@@ -1,0 +1,65 @@
+# Role → tier → concrete-model mapping, organized by PROVIDER.
+#
+# Provider and environment are orthogonal. A "profile" here names a PROVIDER
+# (azure / ollama / openai), not an environment (dev/prod). `LLM_PROFILE` in .env
+# selects which one is active. Where inference runs only affects
+# cost/latency/quality/secrets — never the workflow's behavior or output, since
+# every node is provider-agnostic (calls get_model(role) -> BaseChatModel).
+#
+# Roles map to difficulty tiers; tiers map to concrete models per provider.
+# A value of `env:NAME` is resolved from environment variable NAME at runtime
+# (used so Azure deployment names live in .env with the rest of the Azure config).
+
+roles:
+  routing: cheap     # intent / routing — high volume, low difficulty
+  scope: cheap       # propose a buildable plan
+  generation: strong # produce the HTML/JS/CSS artifact — quality matters most
+  fix: strong        # apply fixes / regenerate
+  review: mid        # summarize what the user sees
+  diagnose: mid      # interpret what's broken
+
+profiles:
+  # Azure OpenAI. Endpoint/key/api-version come from env (AZURE_OPENAI_ENDPOINT,
+  # AZURE_OPENAI_API_KEY, OPENAI_API_VERSION). Deployment names per tier come from
+  # env too (set in .env). The tiers point at gpt-5 reasoning deployments, so there
+  # is intentionally NO `temperature` here — those models 400 on any non-default
+  # value, and the factory only sends temperature when a profile sets it. Reasoning
+  # models need a 2024-12-01-preview+ api-version. If you switch a tier to a
+  # gpt-4o-class chat model you can add `temperature: 0.2` back.
+  azure:
+    provider: azure
+    timeout: 180
+    # gpt-5 reasoning effort: minimal|low|medium|high. "minimal" keeps demo
+    # generation snappy (~20-30s) while staying gpt-5 quality; raise it for more
+    # thorough output at the cost of latency. Remove this line if a tier points at
+    # a non-reasoning (gpt-4o-class) model.
+    reasoning_effort: minimal
+    tiers:
+      cheap: env:AZURE_DEPLOYMENT_CHEAP
+      mid: env:AZURE_DEPLOYMENT_MID
+      strong: env:AZURE_DEPLOYMENT_STRONG
+
+  # Local Ollama. No secrets needed. These map to models pulled on this machine;
+  # `ollama pull qwen2.5-coder:7b` gives a faster, code-specialized option.
+  ollama:
+    provider: ollama
+    base_url: http://localhost:11434
+    temperature: 0.2
+    timeout: 300
+    tiers:
+      cheap: qwen2.5:14b
+      mid: qwen2.5:14b
+      strong: qwen2.5:32b
+
+  # Any OpenAI-compatible endpoint (OpenAI itself, vLLM, LM Studio, etc.).
+  # api_key is read from env via the env: indirection.
+  openai:
+    provider: openai_compatible
+    base_url: https://api.openai.com/v1
+    api_key: env:OPENAI_API_KEY
+    temperature: 0.2
+    timeout: 120
+    tiers:
+      cheap: gpt-4o-mini
+      mid: gpt-4o-mini
+      strong: gpt-4o

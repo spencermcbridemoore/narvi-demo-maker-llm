@@ -1,0 +1,2 @@
+# Keeps the data/ directory in git. The SQLite checkpoint file (checkpoints.sqlite)
+# is written here at runtime and is git-ignored.

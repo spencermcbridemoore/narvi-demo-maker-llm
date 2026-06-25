@@ -1,0 +1,43 @@
+[project]
+name = "demobuilder-backend"
+version = "0.1.0"
+description = "DemoBuilder — FastAPI + LangGraph backend for building self-contained interactive HTML demos through a human-in-the-loop workflow."
+readme = "../README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "spencermcbridemoore" }]
+
+# Pins mirror requirements.txt. requirements.txt is the canonical install file
+# (`pip install -r requirements.txt`); this block exists for tooling/metadata.
+dependencies = [
+  "langgraph==1.2.6",
+  "langgraph-checkpoint==4.1.1",
+  "langgraph-checkpoint-sqlite==3.1.0",
+  "aiosqlite==0.22.1",
+  "ag-ui-langgraph[fastapi]==0.0.42",
+  "ag-ui-protocol==0.1.19",
+  "fastapi==0.137.2",
+  "uvicorn[standard]==0.49.0",
+  "sse-starlette==3.4.4",
+  "langchain>=1.2.0,<2.0.0",
+  "langchain-core>=1.4.8,<2.0.0",
+  "langchain-openai>=1.3.2,<2.0.0",
+  "langchain-ollama>=1.1.0,<2.0.0",
+  "python-dotenv>=1.0.0,<2.0.0",
+  "PyYAML>=6.0,<7.0",
+  "truststore>=0.10,<1.0",
+]
+
+[project.optional-dependencies]
+# Production checkpointer seam: `pip install -e .[postgres]`
+postgres = ["langgraph-checkpoint-postgres==3.1.0"]
+# Test suite: `pip install -r requirements-dev.txt` then `pytest`
+dev = ["pytest>=8.0,<9.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]

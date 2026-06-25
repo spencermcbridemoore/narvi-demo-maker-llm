@@ -1,0 +1,38 @@
+# DemoBuilder backend — pinned dependencies (Python 3.11+)
+# Verified against live PyPI metadata, mid-2026. See README "Architecture" for rationale.
+
+# --- Core graph + human-in-the-loop ---
+langgraph==1.2.6
+langgraph-checkpoint==4.1.1
+langgraph-checkpoint-sqlite==3.1.0
+aiosqlite==0.22.1
+
+# --- AG-UI transport: runs the StateGraph in-process and emits
+#     STATE_SNAPSHOT / STATE_DELTA + interrupt events over SSE.
+#     This is what keeps the backend 100% Python (no Node runtime). ---
+ag-ui-langgraph[fastapi]==0.0.42
+ag-ui-protocol==0.1.19
+
+# --- Web server ---
+fastapi==0.137.2
+uvicorn[standard]==0.49.0
+sse-starlette==3.4.4
+
+# --- LLM access (factory scaffolded now; fully wired in Stage 3) ---
+langchain>=1.2.0,<2.0.0
+langchain-core>=1.4.8,<2.0.0
+langchain-openai>=1.3.2,<2.0.0
+langchain-ollama>=1.1.0,<2.0.0
+
+# --- Config & secrets ---
+python-dotenv>=1.0.0,<2.0.0
+PyYAML>=6.0,<7.0
+
+# TLS via the OS trust store — required behind TLS-intercepting proxies so HTTPS
+# provider calls (e.g. Azure OpenAI) validate against the system root CAs.
+truststore>=0.10,<1.0
+
+# --- Production seam: uncomment to swap the SQLite checkpointer for Postgres.
+#     PostgresSaver uses the same from_conn_string API, so this is a one-line
+#     change in app/graph/build.py. ---
+# langgraph-checkpoint-postgres==3.1.0
