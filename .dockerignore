@@ -1,0 +1,39 @@
+# Keep secrets, local state, and bulky/irrelevant files OUT of the Docker build
+# context (defense-in-depth: the Dockerfiles also never COPY these).
+
+# --- Secrets: never enter the build context ---
+.env
+.env.*
+!.env.example
+# ...but the SAME-ORIGIN build config is NOT a secret and MUST reach the build:
+!frontend/.env.production
+
+# --- VCS / editor / agent ---
+.git
+.gitignore
+.claude
+scratch
+
+# --- Python local env / caches ---
+.venv
+venv
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+
+# --- Node / frontend (deps + build output are produced inside the image) ---
+**/node_modules
+frontend/dist
+**/*.tsbuildinfo
+
+# --- Runtime data / databases ---
+**/*.sqlite
+**/*.sqlite-*
+**/*.db
+backend/app/data/*
+
+# --- Docs/build artifacts not needed in images ---
+**/*.md
+!README.md

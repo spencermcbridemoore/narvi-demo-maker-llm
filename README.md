@@ -232,6 +232,26 @@ network/provider and covers interrupt/resume, the conditional/cyclic routing,
 - **Local Ollama is slow.** Big models are CPU-bound; `ollama pull qwen2.5-coder:7b`
   is faster and better at HTML, or switch to `LLM_PROFILE=azure`.
 
+## Deployment (Jetstream2)
+
+Production runs as a **Docker Compose** stack (separate from local dev — `python
+run.py` is unchanged): a **Caddy** edge serves the built static frontend and
+reverse-proxies the API **same-origin** (no CORS), with **automatic HTTPS**
+(Let's Encrypt) and a per-IP rate limit; the FastAPI/LangGraph backend runs
+behind it. gpt-5 inference is on Azure, so the VM is CPU-only (Jetstream2
+`m3.small`). On the instance:
+
+```bash
+cp .env.example .env          # fill in AZURE_*, SITE_ADDRESS=<your FQDN>, ACME_EMAIL
+docker compose -f deploy/docker-compose.yml up -d --build
+```
+
+The Azure key is injected at runtime (`env_file`), never baked into an image.
+**Access is open by design — bound LLM spend with a low Azure deployment TPM
+quota (a Budget only *alerts*, it doesn't stop spend) plus the built-in per-IP
+rate limit.** Full guide, cost controls, cloud-init, and the verify checklist:
+**[deploy/README.md](deploy/README.md)**.
+
 ## Roadmap
 
 - **Stage 1 ✅** Walking skeleton: 2-node graph, interrupt/resume, flowchart from

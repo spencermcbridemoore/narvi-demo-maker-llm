@@ -1,0 +1,56 @@
+# DemoBuilder edge config: same-origin SPA + API reverse proxy + automatic HTTPS.
+#
+# SITE_ADDRESS / ACME_EMAIL come from the container environment (compose env_file).
+#   - Production: SITE_ADDRESS=demobuilder.example.org  (a real hostname → Caddy
+#     gets a browser-trusted Let's Encrypt cert automatically; needs ports 80+443
+#     open and a DNS A record at the floating IP).
+#   - Local test: SITE_ADDRESS=:80  (plain HTTP, no ACME).
+
+{
+	email {$ACME_EMAIL}
+	# Ensure the rate limiter runs before the proxy/file handlers.
+	order rate_limit before reverse_proxy
+	# While testing DNS/ports, uncomment to avoid burning Let's Encrypt rate limits:
+	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+
+{$SITE_ADDRESS} {
+	# /agent is the ONLY endpoint that triggers Azure LLM spend, so it gets a
+	# per-client-IP cap — a cheap defense against scripted abuse. The real cost
+	# bound is the Azure deployment TPM/RPM quota (see deploy/README.md). Tune the
+	# numbers here freely; a normal session is naturally paced by generation time.
+	@agent path /agent /agent/*
+	handle @agent {
+		rate_limit {
+			zone agent {
+				key {remote_host}
+				events 40
+				window 1m
+			}
+		}
+		reverse_proxy backend:8000 {
+			# SSE: flush each event immediately and don't cancel the upstream when
+			# the browser disconnects mid-stream. No read/write timeout is set, so
+			# long-lived /agent streams are never severed.
+			flush_interval -1
+		}
+	}
+
+	# Other API routes (no LLM spend) — proxied, not rate-limited.
+	@api path /mermaid /config /health /thread/*
+	handle @api {
+		reverse_proxy backend:8000 {
+			flush_interval -1
+		}
+	}
+
+	# Everything else → the built SPA. Real files (e.g. /assets/index-abc.js) are
+	# served directly; unknown routes fall back to index.html for client routing.
+	# encode is applied to static assets ONLY (never around the SSE proxy above).
+	handle {
+		encode zstd gzip
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}

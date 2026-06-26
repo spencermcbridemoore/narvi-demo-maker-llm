@@ -1,0 +1,63 @@
+# DemoBuilder production stack: a same-origin Caddy edge (TLS + static SPA +
+# API reverse proxy) in front of the FastAPI/LangGraph backend.
+#
+#   docker compose -f deploy/docker-compose.yml up -d --build
+#
+# Secrets (the Azure key) are injected at RUNTIME from ../.env via env_file and
+# are NEVER baked into an image layer. No top-level `version:` key (obsolete).
+name: demobuilder
+
+services:
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/backend.Dockerfile
+    image: demobuilder-backend:local
+    restart: unless-stopped
+    # Runtime env: Azure creds + LLM config + ALLOWED_ORIGINS. Never in the image.
+    env_file:
+      - ../.env
+    # SQLite checkpoint dir (checkpoints.sqlite + -wal/-shm) survives recreate.
+    volumes:
+      - backend-data:/app/backend/app/data
+    # Internal only — reachable as backend:8000 on the compose network, never
+    # bound to a host port.
+    expose:
+      - "8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 25s
+
+  caddy:
+    build:
+      context: ..
+      dockerfile: deploy/web.Dockerfile
+    image: demobuilder-web:local
+    restart: unless-stopped
+    # SITE_ADDRESS + ACME_EMAIL are read from ../.env by the Caddyfile.
+    env_file:
+      - ../.env
+    # Only the edge is internet-facing. 443/udp enables HTTP/3.
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    depends_on:
+      backend:
+        condition: service_healthy
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data       # TLS certs/keys/ACME account — MUST persist
+      - caddy-config:/config
+
+volumes:
+  backend-data:
+  caddy-data:
+  caddy-config:

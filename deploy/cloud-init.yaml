@@ -1,0 +1,47 @@
+#cloud-config
+# DemoBuilder — Jetstream2 (Ubuntu 22.04/24.04, m3.small) first-boot provisioning.
+#
+# Installs Docker Engine + Compose v2, adds 4 GB swap (so the in-container
+# `npm run build` can't OOM on m3.small's 6 GB RAM), and clones the repo. It does
+# NOT start the stack, because the secret .env is delivered out-of-band — see the
+# final_message for the two remaining manual steps.
+#
+# Paste this into Exosphere's "user-data" / "custom boot script" box at launch.
+# Validate first:  cloud-init schema --config-file deploy/cloud-init.yaml
+# (#cloud-config MUST be the literal first line.)
+
+package_update: true
+packages:
+  - ca-certificates
+  - curl
+  - git
+
+runcmd:
+  # 1) 4 GB swap BEFORE any build (m3.small = 6 GB RAM, no swap by default).
+  - [ bash, -c, "test -f /swapfile || fallocate -l 4G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=4096" ]
+  - [ chmod, "600", /swapfile ]
+  - [ bash, -c, "mkswap /swapfile && swapon /swapfile" ]
+  - [ bash, -c, "grep -q /swapfile /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab" ]
+
+  # 2) Docker Engine + Compose v2 plugin (official convenience script).
+  - [ bash, -c, "curl -fsSL https://get.docker.com | sh" ]
+  - [ usermod, -aG, docker, ubuntu ]
+  - [ systemctl, enable, --now, docker ]
+
+  # 3) Clone the repo to /opt/app. The deploy/ files live on the demobuilder-mvp
+  #    branch; once it's merged to main, drop `--branch demobuilder-mvp`.
+  - [ bash, -c, "test -d /opt/app/.git || git clone --branch demobuilder-mvp https://github.com/spencermcbridemoore/narvi-demo-maker-llm.git /opt/app" ]
+  - [ chown, "-R", "ubuntu:ubuntu", /opt/app ]
+
+  # 4) Bring the stack up ONLY if the secret .env was already placed (else wait).
+  - [ bash, -c, "if [ -f /opt/app/.env ]; then cd /opt/app && docker compose -f deploy/docker-compose.yml up -d --build; fi" ]
+
+final_message: |
+  cloud-init done: Docker + Compose installed, 4 GB swap active, repo at /opt/app.
+  Two steps remain (the Azure key is intentionally NOT in cloud-init):
+    1) Copy your secret .env to /opt/app/.env  (e.g. scp). Set, inside it:
+         SITE_ADDRESS=<your FQDN>        ACME_EMAIL=<you@example.org>
+         ALLOWED_ORIGINS=https://<FQDN>  and the AZURE_* values.
+    2) Point a DNS A record for <FQDN> at this instance's floating IP, ensure
+       inbound ports 80 + 443 are open, then:
+         cd /opt/app && docker compose -f deploy/docker-compose.yml up -d --build

@@ -229,6 +229,9 @@ frontend/.env.local
 .vite/
 *.tsbuildinfo
 
+# Local scratch / notes (never deploy artifacts or secrets)
+scratch/
+
 # SQLite checkpoint files generated at runtime (LangGraph checkpointer)
 *.sqlite
 *.sqlite3

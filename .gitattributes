@@ -1,0 +1,10 @@
+# Normalize line endings. Deploy scripts/configs execute on Linux, so force LF
+# regardless of contributors' core.autocrlf settings (CRLF would break the bash
+# shebang and cloud-init / Caddy / compose parsing).
+* text=auto
+*.sh        text eol=lf
+*.yaml      text eol=lf
+*.yml       text eol=lf
+Caddyfile   text eol=lf
+Dockerfile  text eol=lf
+*.Dockerfile text eol=lf
