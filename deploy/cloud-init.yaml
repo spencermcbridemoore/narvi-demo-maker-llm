@@ -2,9 +2,14 @@
 # DemoBuilder — Jetstream2 (Ubuntu 22.04/24.04, m3.small) first-boot provisioning.
 #
 # Installs Docker Engine + Compose v2, adds 4 GB swap (so the in-container
-# `npm run build` can't OOM on m3.small's 6 GB RAM), and clones the repo. It does
-# NOT start the stack, because the secret .env is delivered out-of-band — see the
-# final_message for the two remaining manual steps.
+# `npm run build` can't OOM on m3.small's 6 GB RAM), clones the repo, and relocates
+# Docker's containerd build store onto the attached data volume (so the xcaddy build
+# can't fill the 20 GB root — see deploy/README.md §9). It does NOT start the stack,
+# because the secret .env is delivered out-of-band — see the final_message for the
+# two remaining manual steps.
+#
+# Pair with deploy/provision.sh, which creates + attaches that data volume
+# (VOLUME_NAME / VOLUME_SIZE) before this runs.
 #
 # Paste this into Exosphere's "user-data" / "custom boot script" box at launch.
 # Validate first:  cloud-init schema --config-file deploy/cloud-init.yaml
@@ -33,11 +38,21 @@ runcmd:
   - [ bash, -c, "test -d /opt/app/.git || git clone --branch demobuilder-mvp https://github.com/spencermcbridemoore/narvi-demo-maker-llm.git /opt/app" ]
   - [ chown, "-R", "ubuntu:ubuntu", /opt/app ]
 
-  # 4) Bring the stack up ONLY if the secret .env was already placed (else wait).
-  - [ bash, -c, "if [ -f /opt/app/.env ]; then cd /opt/app && docker compose -f deploy/docker-compose.yml up -d --build; fi" ]
+  # 4) Relocate Docker's containerd build store onto the attached data volume
+  #    BEFORE any build — the xcaddy build overflows the 20 GB root otherwise
+  #    (deploy/relocate-docker-storage.sh; on a fresh box it redirects only, no
+  #    rsync). The `&&` gates the bring-up: if relocation/preflight fails the build
+  #    is skipped (with a clear error in the console log) rather than dying on
+  #    "no space left on device" mid-compile. Then bring the stack up ONLY if the
+  #    secret .env was already placed (else it waits for the manual step below).
+  - [ bash, -c, "bash /opt/app/deploy/relocate-docker-storage.sh && if [ -f /opt/app/.env ]; then cd /opt/app && docker compose -f deploy/docker-compose.yml up -d --build; fi" ]
 
 final_message: |
   cloud-init done: Docker + Compose installed, 4 GB swap active, repo at /opt/app.
+  A containerd-store relocation onto the data volume was ATTEMPTED — verify before
+  building: `findmnt /var/lib/containerd` must show the data volume, not the root
+  disk. If it doesn't, check `tail /var/log/cloud-init-output.log` and re-run
+  `sudo bash deploy/relocate-docker-storage.sh` first.
   Two steps remain (the Azure key is intentionally NOT in cloud-init):
     1) Copy your secret .env to /opt/app/.env  (e.g. scp). Set, inside it:
          SITE_ADDRESS=<your FQDN>        ACME_EMAIL=<you@example.org>

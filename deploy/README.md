@@ -203,11 +203,46 @@ The Azure key must never reach the repo or an image layer:
   both containers back after a host reboot. (A manual `docker compose stop` stays
   stopped — that's intended.)
 - **Update:** `cd /opt/app && git pull && docker compose -f deploy/docker-compose.yml up -d --build`.
-- **Disk (20 GB):** images + 4 GB swap + build cache add up. `docker image prune` /
-  `docker builder prune` periodically; watch `df -h /`.
+- **Disk (20 GB) — the headline gotcha.** The custom Caddy build (`xcaddy build
+  --with caddy-ratelimit`) drags in Caddy's full build graph; its transient Go
+  output overflows the 20 GB root with `no space left on device` *mid-compile*.
+  **Provisioning now prevents this**: `deploy/provision.sh` creates + attaches a
+  50 GB Cinder volume (`VOLUME_NAME` / `VOLUME_SIZE`) and `deploy/cloud-init.yaml`
+  runs `deploy/relocate-docker-storage.sh` on first boot to move Docker's build
+  storage onto it (manual path: `deploy/setup.sh` does the same).
+  - **Critical detail:** this Docker install (get.docker.com on Ubuntu 24) uses the
+    **containerd image store**, so moving Docker's `data-root` is *not* enough — the
+    build writes to **`/var/lib/containerd`**, which the script bind-mounts onto the
+    volume (the part that actually fixes it). Tell the store is containerd-backed when
+    `docker images` prints the `DISK USAGE / CONTENT SIZE / IN USE` table.
+  - **Verify the fix:** `df -h /var/lib/containerd` shows the volume, not `/dev/sda1`.
+  - **Never `rsync` a live containerd store** — it leaves the snapshotter
+    inconsistent (`failed to walk ... no such file or directory`). A fresh box has
+    nothing to migrate, so the script *redirects only*. If a store is already
+    corrupt: `docker builder prune -af` then rebuild.
+  - Still prune periodically: `docker image prune` / `docker builder prune`; `df -h /`.
 - **Scaling:** single uvicorn worker + SQLite is correct for this size. Don't run
   multiple backend replicas against one SQLite file — use the documented Postgres
   seam (`AsyncPostgresSaver`, a one-line swap in `app/graph/build.py`) instead.
+
+---
+
+## 10. Future upgrade: pre-built images (CI + registry)
+
+Today the instance *builds* both images, which is what makes the disk and npm-OOM
+pitfalls possible at all. The cleaner long-term path is to **build in CI and pull**:
+
+- Build `web` + `backend` in **GitHub Actions** (no corporate proxy in CI) and push
+  to **GHCR**.
+- Swap the `build:` blocks in `deploy/docker-compose.yml` for `image:` refs so the
+  instance runs `docker compose pull` instead of `up --build`. This eliminates BOTH
+  the `xcaddy` disk wall and the npm heap-OOM, makes deploys near-instant, and frees
+  the 20 GB root (the volume relocation above becomes optional).
+
+The Dockerfiles are already distribution-ready (multi-stage, secrets via runtime
+`env_file`, no host-path assumptions). The only host dependency is the bind-mounted
+`Caddyfile` (`docker-compose.yml`), so the repo still needs to be present on the
+host. **Not implemented yet** — revisit if this becomes frequently redeployed.
 
 ---
 
@@ -219,5 +254,7 @@ The Azure key must never reach the repo or an image layer:
 | `web.Dockerfile` | node build (same-origin SPA) → xcaddy build (rate-limit) → caddy + `/srv` |
 | `Caddyfile` | static SPA + SSE-safe API proxy + per-IP `/agent` limit + auto-HTTPS |
 | `docker-compose.yml` | the 2-service stack; `env_file: ../.env`; volumes; healthcheck |
-| `cloud-init.yaml` | Jetstream2 first-boot: swap + Docker + clone |
+| `provision.sh` | laptop-side OpenStack CLI: volume + instance + networking + floating IP |
+| `cloud-init.yaml` | Jetstream2 first-boot: swap + Docker + clone + containerd relocation |
+| `relocate-docker-storage.sh` | mounts the data volume + relocates `/var/lib/containerd` (disk preflight) |
 | `setup.sh` | manual provisioning/bring-up alternative |
