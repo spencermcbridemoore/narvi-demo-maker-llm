@@ -23,9 +23,9 @@ packages:
 
 runcmd:
   # 1) 4 GB swap BEFORE any build (m3.small = 6 GB RAM, no swap by default).
-  - [ bash, -c, "test -f /swapfile || fallocate -l 4G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=4096" ]
-  - [ chmod, "600", /swapfile ]
-  - [ bash, -c, "mkswap /swapfile && swapon /swapfile" ]
+  #    Guarded on ACTIVE swap so a cloud-init re-run (clean + reboot) doesn't
+  #    mkswap a live /swapfile; dd (not fallocate) is filesystem-agnostic.
+  - [ bash, -c, "swapon --show | grep -q /swapfile || { dd if=/dev/zero of=/swapfile bs=1M count=4096 && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile; }" ]
   - [ bash, -c, "grep -q /swapfile /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab" ]
 
   # 2) Docker Engine + Compose v2 plugin (official convenience script).

@@ -12,7 +12,9 @@ cd "$REPO_ROOT"
 
 echo "==> 1/5  4 GB swap (so the in-container npm build can't OOM on 6 GB RAM)"
 if ! swapon --show 2>/dev/null | grep -q /swapfile; then
-  fallocate -l 4G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=4096
+  # dd (not fallocate) writes real zeroed blocks, so mkswap/swapon never hit the
+  # unwritten-extent/holes rejection on non-ext4 roots. ~4 GiB, a few seconds.
+  dd if=/dev/zero of=/swapfile bs=1M count=4096
   chmod 600 /swapfile
   mkswap /swapfile
   swapon /swapfile
