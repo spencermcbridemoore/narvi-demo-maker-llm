@@ -44,6 +44,12 @@
 		}
 	}
 
+	# Optional extra routes, e.g. the rubric grader behind a login. Generated on the
+	# instance by deploy/enable-grader.sh into deploy/sites/ (git-ignored). A glob
+	# that matches nothing is a no-op, and without that file /grader/api/* is simply
+	# not proxied: the grader is closed by default and DemoBuilder is unaffected.
+	import /etc/caddy/sites/*.caddy
+
 	# Everything else → the built SPA. Real files (e.g. /assets/index-abc.js) are
 	# served directly; unknown routes fall back to index.html for client routing.
 	# encode is applied to static assets ONLY (never around the SSE proxy above).

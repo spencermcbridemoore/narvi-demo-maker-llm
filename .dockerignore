@@ -28,6 +28,9 @@ venv
 frontend/dist
 **/*.tsbuildinfo
 
+# --- Rubric grader kit (student data; mounted read-only at runtime, never baked in) ---
+grader_kit
+
 # --- Runtime data / databases ---
 **/*.sqlite
 **/*.sqlite-*

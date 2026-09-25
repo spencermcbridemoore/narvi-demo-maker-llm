@@ -18,8 +18,14 @@ services:
     env_file:
       - ../.env
     # SQLite checkpoint dir (checkpoints.sqlite + -wal/-shm) survives recreate.
+    # The rubric grader keeps its runs + sample cache under data/grader too.
     volumes:
       - backend-data:/app/backend/app/data
+      # Rubric grader's example kit (student data, so never baked into the image).
+      # Unzip rubric_grader_handoff_*.zip into /opt/app/grader_kit/ to enable it.
+      - ../grader_kit:/app/grader_kit:ro
+    environment:
+      GRADER_KIT_DIR: /app/grader_kit/rubric_grader_handoff
     # Internal only — reachable as backend:8000 on the compose network, never
     # bound to a host port.
     expose:
@@ -54,6 +60,7 @@ services:
         condition: service_healthy
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./sites:/etc/caddy/sites:ro   # optional routes (deploy/enable-grader.sh)
       - caddy-data:/data       # TLS certs/keys/ACME account — MUST persist
       - caddy-config:/config
 

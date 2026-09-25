@@ -26,6 +26,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from ag_ui_langgraph import LangGraphAgent, add_langgraph_fastapi_endpoint
 
 from .config import AGENT_NAME, ALLOWED_ORIGINS, CHECKPOINT_DB, DATA_DIR, LLM_PROFILE
+from .grader.api import router as grader_router
 from .graph.build import build_graph
 
 
@@ -61,6 +62,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Rubric grader (self-contained package; UI at /grader, API at /grader/api/*).
+app.include_router(grader_router)
+
 
 def _config(thread_id: str) -> dict:
     return {"configurable": {"thread_id": thread_id}}
@@ -82,7 +86,8 @@ async def root():
         "service": "DemoBuilder API",
         "note": "This is the backend API. Open the app in your browser instead:",
         "open_the_app_at": "http://localhost:5173",
-        "endpoints": ["/health", "/config", "/mermaid", "POST /agent (AG-UI SSE)"],
+        "endpoints": ["/health", "/config", "/mermaid", "POST /agent (AG-UI SSE)",
+                      "/grader/api/* (rubric grader; UI at /grader)"],
         "docs": "/docs",
     }
 

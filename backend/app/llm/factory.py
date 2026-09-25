@@ -33,6 +33,7 @@ class Role(str, Enum):
     FIX = "fix"                # strong
     REVIEW = "review"          # mid
     DIAGNOSE = "diagnose"      # mid
+    GRADE = "grade"            # mid — rubric grader (app.grader), many small calls
 
 
 @lru_cache(maxsize=1)

@@ -239,3 +239,10 @@ scratch/
 *.sqlite-wal
 *.sqlite-shm
 backend/app/data/checkpoints.sqlite*
+
+# Rubric grader: the handoff kit (student data, even if consented) and all runtime
+# grading data (assessments, runs, sample cache) stay out of git.
+grader_kit/
+backend/app/data/grader/
+# Generated Caddy routes with password hashes (deploy/enable-grader.sh)
+deploy/sites/*.caddy

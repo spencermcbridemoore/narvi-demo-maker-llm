@@ -1,0 +1,16 @@
+PROBLEM
+<problem>
+{{problem}}
+</problem>
+{{instructions_block}}
+STUDENT RESPONSE
+<response>
+{{response}}
+</response>
+
+RUBRIC ITEM TO GRADE ({{label}})
+<rubric_item>
+{{criterion}}
+</rubric_item>
+
+Does the student response satisfy this rubric item?

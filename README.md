@@ -18,6 +18,10 @@ email.
 > placeholder/fallback surfacing, active-provider badge, "New demo" restart, and a
 > pytest suite. See [Roadmap](#roadmap).
 
+> **Also here: the Rubric Grader (MVP)** at `/grader`. It grades student text
+> against binary rubric items with k-vote confidence and teacher review. It reuses
+> this repo's Azure access and deploy. See [GRADER.md](GRADER.md).
+
 ---
 
 ## What you see
