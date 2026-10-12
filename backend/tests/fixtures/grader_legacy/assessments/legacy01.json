@@ -1,0 +1,49 @@
+{
+ "id": "legacy01",
+ "name": "Sample upload",
+ "source": "csv",
+ "rubric_version": "uploaded",
+ "problems": [
+  {
+   "id": "P1",
+   "text": "Explain why ice floats on water.",
+   "instructions": ""
+  }
+ ],
+ "criteria": [
+  {
+   "id": "P1#1",
+   "problem_id": "P1",
+   "key": "1",
+   "label": "Item 1",
+   "text": "Mentions density (explicitly or via mass per volume).",
+   "source_text": "Mentions density (explicitly or via mass per volume).",
+   "points": 1.0
+  },
+  {
+   "id": "P1#2",
+   "problem_id": "P1",
+   "key": "2",
+   "label": "Item 2",
+   "text": "States that solid ice is less dense than liquid water.",
+   "source_text": "States that solid ice is less dense than liquid water.",
+   "points": 1.0
+  }
+ ],
+ "responses": [
+  {
+   "id": "S001",
+   "problem_id": "P1",
+   "text": "Ice is less dense than water, so it floats.",
+   "external_id": "S001"
+  },
+  {
+   "id": "S002",
+   "problem_id": "P1",
+   "text": "It floats because it is lighter than water.",
+   "external_id": "S002"
+  }
+ ],
+ "references": {},
+ "created": 1790362045.852293
+}

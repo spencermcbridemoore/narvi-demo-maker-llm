@@ -1,0 +1,117 @@
+{
+ "id": "legacyrun01",
+ "assessment_id": "legacy01",
+ "config": {
+  "k": 1,
+  "effort": "minimal",
+  "concurrency": 6,
+  "problem_ids": null,
+  "max_responses": null
+ },
+ "status": "done",
+ "model": "gpt-5-mini",
+ "prompt_version": "0000000000",
+ "total_calls": 4,
+ "done_calls": 4,
+ "failed_calls": 0,
+ "cached_calls": 0,
+ "started": 1790362050.0,
+ "finished": 1790362060.0,
+ "usage": {
+  "input_tokens": 1200,
+  "output_tokens": 300,
+  "reasoning_tokens": 0,
+  "cached_tokens": 0
+ },
+ "cells": {
+  "S001#1": {
+   "instance_id": "S001#1",
+   "response_id": "S001",
+   "criterion_id": "P1#1",
+   "samples": [
+    {
+     "verdict": 1,
+     "comparison": "Made-up comparison for the fixture.",
+     "evidence": [
+      "less dense"
+     ],
+     "quotes_found": true,
+     "error": null,
+     "cached": false
+    }
+   ],
+   "final": 1,
+   "confidence": 1.0,
+   "votes": "1/1",
+   "flags": [],
+   "resolved_by": "majority",
+   "override": null
+  },
+  "S001#2": {
+   "instance_id": "S001#2",
+   "response_id": "S001",
+   "criterion_id": "P1#2",
+   "samples": [
+    {
+     "verdict": 1,
+     "comparison": "Made-up comparison for the fixture.",
+     "evidence": [
+      "less dense than water"
+     ],
+     "quotes_found": true,
+     "error": null,
+     "cached": false
+    }
+   ],
+   "final": 1,
+   "confidence": 1.0,
+   "votes": "1/1",
+   "flags": [],
+   "resolved_by": "majority",
+   "override": null
+  },
+  "S002#1": {
+   "instance_id": "S002#1",
+   "response_id": "S002",
+   "criterion_id": "P1#1",
+   "samples": [
+    {
+     "verdict": 0,
+     "comparison": "Made-up comparison for the fixture.",
+     "evidence": [],
+     "quotes_found": null,
+     "error": null,
+     "cached": false
+    }
+   ],
+   "final": 0,
+   "confidence": 1.0,
+   "votes": "1/1",
+   "flags": [],
+   "resolved_by": "majority",
+   "override": null
+  },
+  "S002#2": {
+   "instance_id": "S002#2",
+   "response_id": "S002",
+   "criterion_id": "P1#2",
+   "samples": [
+    {
+     "verdict": 0,
+     "comparison": "Made-up comparison for the fixture.",
+     "evidence": [],
+     "quotes_found": null,
+     "error": null,
+     "cached": false
+    }
+   ],
+   "final": 0,
+   "confidence": 1.0,
+   "votes": "1/1",
+   "flags": [],
+   "resolved_by": "majority",
+   "override": null
+  }
+ },
+ "error": null
+}

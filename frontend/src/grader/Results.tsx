@@ -1,22 +1,26 @@
-// Step 4: the students x items grid, the review queue (confidence slider + hard
-// flags), the per-cell drawer with every vote, teacher overrides, and exports.
+// Step 5: the students x items grid grouped by version, the review queue (confidence
+// slider + hard flags), the per-cell drawer with every vote, teacher overrides, and
+// the grades export. A run is shown with the rubric it used (its own copy), and says
+// so when the bank's rubric has been revised since.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
 import {
   api,
-  instanceId,
   needsReview,
-  type Assessment,
+  type Bank,
   type Cell,
   type CellCompact,
-  type Criterion,
   type Metrics,
   type ResponseItem,
+  type RubricItem,
+  type RubricVersion,
   type Run,
+  type RunSummary,
 } from "./api";
 import { download, toCsv } from "./csv";
-import { errMsg, f2, fmtInt, pct } from "./util";
+import { ConfirmButton, RunProblem, SideBox, StepLayout, deleteBankQuestion, fmtDate, isLegacy } from "./parts";
+import { displayId, errMsg, f2, fmtInt, pct } from "./util";
 
 const FLAG_TEXT: Record<string, string> = {
   split: "the votes disagreed",
@@ -27,43 +31,86 @@ const FLAG_TEXT: Record<string, string> = {
   addresses_grader: "the response talks to the grader",
 };
 
+/** Mirrors backend model.instance_id(): "<response id>#<item key>". */
+const instanceId = (r: ResponseItem, c: RubricItem) => `${r.id}#${c.key}`;
+/** Points add up as fractions; show and export them without floating-point dust. */
+const tidy = (points: number) => Number(points.toFixed(6));
+
 type Props = {
-  assessment: Assessment;
+  bank: Bank;
   run: Run;
+  runs: RunSummary[]; // every run of this bank, newest first
   idMap: Record<string, string>;
   hardFlags: string[];
   onRunChange: (r: Run) => void;
+  onOpenRun: (id: string) => void;
+  onDeleted: (summary: string) => void;
   onError: (m: string) => void;
 };
 
-export function Results({ assessment, run, idMap, hardFlags, onRunChange, onError }: Props) {
+export function Results({ bank, run, runs, idMap, hardFlags, onRunChange, onOpenRun, onDeleted, onError }: Props) {
   const [threshold, setThreshold] = useState(0.8);
   const [onlyReview, setOnlyReview] = useState(false);
-  const [compare, setCompare] = useState(true);
+  const [compare, setCompare] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<Metrics | null>(null);
 
+  const legacy = isLegacy(bank);
   const cells = useMemo(() => new Map(run.cells.map((c) => [c.instance_id, c])), [run.cells]);
-  const hasRefs = Object.keys(assessment.references).length > 0;
-  const displayId = useCallback(
-    (r: ResponseItem) => idMap[r.external_id] ?? (r.external_id || r.id),
-    [idMap],
+  const hasRefs = Object.keys(bank.references).length > 0;
+  const name = useCallback((r: ResponseItem) => displayId(idMap, r), [idMap]);
+
+  // The versions and items this run graded with: its own copy, or (for a run saved
+  // before copies were kept) the bank as it is now.
+  const recorded = !!run.rubric_copy;
+  const versions: RubricVersion[] = useMemo(
+    () =>
+      run.rubric_copy?.versions ??
+      bank.problems.map((p) => ({
+        id: p.id,
+        text: p.text,
+        instructions: p.instructions,
+        items: bank.criteria.filter((c) => c.problem_id === p.id),
+      })),
+    [run.rubric_copy, bank.problems, bank.criteria],
+  );
+  const revised = recorded && !legacy && (bank.rubric_status !== "approved" || bank.rubric_hash !== run.rubric_hash);
+
+  // A grade belongs to a response only while that response still has both the id and
+  // the text that was graded. The bank's responses can be replaced, and one-time ids
+  // start again at S001 with every upload, so the id alone could put one student's
+  // grades next to another student's answer.
+  const gradedText = run.response_fingerprints ?? null;
+  const asGraded = useCallback(
+    (r: ResponseItem) => !gradedText || gradedText[r.id] === r.fingerprint,
+    [gradedText],
   );
 
-  // Row/column structure in display order, limited to what this run graded.
+  // Rows and columns in display order. A response sits under the version it was
+  // graded with, whatever version it has now.
   const layout = useMemo(
     () =>
-      assessment.problems
-        .map((p) => {
-          const crits = assessment.criteria.filter((c) => c.problem_id === p.id);
-          const resps = assessment.responses.filter(
-            (r) => r.problem_id === p.id && crits.some((c) => cells.has(instanceId(r, c))),
-          );
-          return { problem: p, crits, resps };
-        })
+      versions
+        .map((version) => ({
+          version,
+          crits: version.items,
+          resps: bank.responses.filter(
+            (r) => asGraded(r) && version.items.some((c) => cells.get(instanceId(r, c))?.criterion_id === c.id),
+          ),
+        }))
         .filter((x) => x.resps.length > 0),
-    [assessment, cells],
+    [versions, bank.responses, cells, asGraded],
   );
+  // The grades on screen. Everything counted and exported below is taken from these.
+  const visible = useMemo(
+    () =>
+      layout.flatMap(({ crits, resps }) =>
+        resps.flatMap((r) => crits.map((c) => cells.get(instanceId(r, c))).filter((c): c is CellCompact => !!c)),
+      ),
+    [layout, cells],
+  );
+  const unmatched = run.cells.length - visible.length;
+  const ungraded = run.status === "running" ? 0 : visible.filter((c) => c.final === null).length;
 
   const queue = useMemo(() => {
     const out: string[] = [];
@@ -77,8 +124,9 @@ export function Results({ assessment, run, idMap, hardFlags, onRunChange, onErro
   }, [layout, cells, threshold, hardFlags]);
 
   const refreshMetrics = useCallback(() => {
-    if (hasRefs && run.status !== "running") api.metrics(run.id).then(setMetrics).catch(() => setMetrics(null));
-  }, [hasRefs, run.id, run.status]);
+    if (compare && hasRefs && run.status !== "running")
+      api.metrics(run.id).then(setMetrics).catch(() => setMetrics(null));
+  }, [compare, hasRefs, run.id, run.status]);
   useEffect(() => refreshMetrics(), [refreshMetrics]);
 
   const next = useCallback(() => {
@@ -113,23 +161,24 @@ export function Results({ assessment, run, idMap, hardFlags, onRunChange, onErro
     return () => window.removeEventListener("keydown", onKey);
   }, [selected, decide, next]);
 
-  const graded = run.cells.filter((c) => c.final !== null);
+  const graded = visible.filter((c) => c.final !== null);
   const credit = graded.filter((c) => c.final === 1).length;
-  const overridden = run.cells.filter((c) => c.override !== null).length;
+  const overridden = visible.filter((c) => c.override !== null).length;
 
   const exportRows = (wide: boolean) => {
-    const keys = [...new Set(assessment.criteria.map((c) => c.key))].sort(
+    const keys = [...new Set(versions.flatMap((v) => v.items.map((c) => c.key)))].sort(
       (a, b) => (Number(a) || 0) - (Number(b) || 0) || a.localeCompare(b),
     );
     if (wide) {
       const rows: (string | number | null)[][] = [
-        ["student_id", "problem_id", ...keys.map((k) => `item_${k}`), "points", "max_points", "needs_review"],
+        ["student_id", "problem_id", ...keys.map((k) => `item_${k}`), "points", "max_points", "needs_review", "not_graded"],
       ];
-      for (const { problem, crits, resps } of layout)
+      for (const { version, crits, resps } of layout)
         for (const r of resps) {
           let points = 0;
           let max = 0;
           let review = 0;
+          let missing = 0; // items of a run that stopped early: no grade, so the points are not final
           const byKey: Record<string, number | null> = {};
           for (const c of crits) {
             const cell = cells.get(instanceId(r, c));
@@ -137,23 +186,24 @@ export function Results({ assessment, run, idMap, hardFlags, onRunChange, onErro
             byKey[c.key] = cell.final;
             max += c.points;
             if (cell.final === 1) points += c.points;
+            if (cell.final === null) missing++;
             if (needsReview(cell, threshold, hardFlags)) review++;
           }
-          rows.push([displayId(r), problem.id, ...keys.map((k) => byKey[k] ?? ""), points, max, review]);
+          rows.push([name(r), version.id, ...keys.map((k) => byKey[k] ?? ""), tidy(points), tidy(max), review, missing]);
         }
       return rows;
     }
     const rows: (string | number | null)[][] = [
       ["student_id", "problem_id", "item", "final", "confidence", "votes", "flags", "decided_by", "needs_review"],
     ];
-    for (const { problem, crits, resps } of layout)
+    for (const { version, crits, resps } of layout)
       for (const r of resps)
         for (const c of crits) {
           const cell = cells.get(instanceId(r, c));
           if (!cell) continue;
           rows.push([
-            displayId(r),
-            problem.id,
+            name(r),
+            version.id,
             c.key,
             cell.final,
             cell.confidence,
@@ -166,26 +216,138 @@ export function Results({ assessment, run, idMap, hardFlags, onRunChange, onErro
     return rows;
   };
 
+  const removeBank = async () => {
+    try {
+      const gone = await api.deleteBank(bank.id);
+      onDeleted(
+        `Deleted "${bank.name}": the bank, ${gone.runs} run(s) and ${gone.cached_samples} cached model answer(s).`,
+      );
+    } catch (e) {
+      onError(errMsg(e));
+    }
+  };
+
+  const side = (
+    <SideBox title="More">
+      {hasRefs && (
+        <>
+          <h4>Compare with the human graders</h4>
+          <label className="g-check">
+            <input type="checkbox" checked={compare} onChange={(e) => setCompare(e.target.checked)} /> Show how these
+            grades agree with the two human graders
+          </label>
+          <p className="g-hint">Example data only. Cells where both humans disagree with the final grade get a red dashed outline.</p>
+        </>
+      )}
+
+      <h4>Other exports</h4>
+      <div className="g-row">
+        <button className="g-ghost small" onClick={() => download(`grades_detail_${run.id}.csv`, toCsv(exportRows(false)))}>
+          Detail (one row per item)
+        </button>
+        <a className="g-ghost small" href={api.predictionsUrl(run.id)}>
+          predictions.csv (benchmark format)
+        </a>
+        {Object.keys(idMap).length > 0 && (
+          <button
+            className="g-ghost small"
+            onClick={() => download("id_key.csv", toCsv([["one_time_id", "student_id"], ...Object.entries(idMap)]))}
+          >
+            ID key
+          </button>
+        )}
+      </div>
+
+      <h4>This run</h4>
+      <p className="g-hint">
+        {run.model} · {run.config.k} vote(s) per item · effort {run.config.effort} · {run.status} ·{" "}
+        {recorded ? `rubric revision ${run.rubric_revision}` : "rubric not recorded"} · started {fmtDate(run.started)} ·
+        tokens {fmtInt(run.usage.input_tokens)} in / {fmtInt(run.usage.output_tokens)} out · run {run.id}
+      </p>
+      {runs.length > 1 && (
+        <>
+          <h4>Runs of this bank</h4>
+          <ul className="g-runs">
+            {runs.map((r) => (
+              <li key={r.id}>
+                <span>
+                  {fmtDate(r.started)} · {r.status}
+                  {r.rubric_revision ? ` · revision ${r.rubric_revision}` : ""}
+                </span>
+                {r.id === run.id ? (
+                  <span className="g-hint">shown</span>
+                ) : (
+                  <button className="g-ghost small" onClick={() => onOpenRun(r.id)}>
+                    Open
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      <h4>Delete this bank's data</h4>
+      <ConfirmButton
+        label="Delete this problem bank"
+        question={deleteBankQuestion(bank.name, legacy ? "legacy" : "bank")}
+        confirm="Delete it"
+        disabled={run.status === "running"}
+        onConfirm={removeBank}
+      />
+    </SideBox>
+  );
+
   return (
     <div className={selected ? "g-results with-drawer" : "g-results"}>
-      <div className="g-stack">
+      <StepLayout side={side}>
         <section className="g-card g-controls">
           <div className="g-row between">
             <div>
-              <h2>Results</h2>
+              <h2>Review &amp; export</h2>
               <p className="g-muted">
-                {run.model} · k={run.config.k} · effort {run.config.effort} · run {run.id} ({run.status}) ·{" "}
-                {graded.length} graded, {credit} credit ({pct(graded.length ? credit / graded.length : null)}) · tokens{" "}
-                {fmtInt(run.usage.input_tokens)} in / {fmtInt(run.usage.output_tokens)} out
+                {graded.length} grades, {credit} with credit ({pct(graded.length ? credit / graded.length : null)}) ·{" "}
+                {queue.length} to review · {overridden} decided by you
               </p>
             </div>
             <button className="g-primary" disabled={!queue.length} onClick={next}>
               Review next ({queue.length}) →
             </button>
           </div>
+
+          {!recorded && (
+            <p className="g-callout">
+              Rubric not recorded: this run was saved before runs kept a copy of their rubric. The wording shown is the
+              bank's current one.
+            </p>
+          )}
+          {revised && (
+            <p className="g-callout">
+              The rubric has been revised since this run. These grades used revision {run.rubric_revision}; the rubric is
+              now {bank.rubric_status === "approved" ? `at revision ${bank.rubric_revision}` : "being edited"}. Grade again
+              to use the new wording.
+            </p>
+          )}
+          {unmatched > 0 && (
+            <p className="g-callout">
+              {unmatched} of this run's {run.cells.length} grades are for responses that are no longer attached, or
+              whose text has changed since. They are not shown: they can no longer be matched to a student.
+            </p>
+          )}
+          {ungraded > 0 && (
+            <p className="g-callout">
+              This run stopped before it finished: {ungraded} of the {visible.length} grades shown are missing. Start
+              grading again to complete them; votes already given are kept. In the export, "not_graded" counts the
+              missing items of each student.
+            </p>
+          )}
+          <RunProblem run={run} />
+
           <div className="g-row">
             <label className="g-slider">
-              Review items with vote agreement below <strong>{Math.round(threshold * 100)}%</strong>
+              <span>
+                Review items with vote agreement below <strong>{Math.round(threshold * 100)}%</strong>
+              </span>
               <input
                 type="range"
                 min={0.5}
@@ -195,49 +357,25 @@ export function Results({ assessment, run, idMap, hardFlags, onRunChange, onErro
                 onChange={(e) => setThreshold(Number(e.target.value))}
               />
             </label>
-            <span className="g-muted">
-              {queue.length} to review · {overridden} decided by you · flagged items always included
-            </span>
-          </div>
-          <div className="g-row">
             <label className="g-check">
               <input type="checkbox" checked={onlyReview} onChange={(e) => setOnlyReview(e.target.checked)} /> Only rows
               with something to review
             </label>
-            {hasRefs && (
-              <label className="g-check">
-                <input type="checkbox" checked={compare} onChange={(e) => setCompare(e.target.checked)} /> Outline cells where
-                both human graders disagree with the final grade
-              </label>
-            )}
           </div>
           <div className="g-row">
-            <span className="g-muted">Export:</span>
-            <button className="g-ghost small" onClick={() => download(`grades_${run.id}.csv`, toCsv(exportRows(true)))}>
-              Grades (one row per student)
+            <button className="g-ghost" onClick={() => download(`grades_${run.id}.csv`, toCsv(exportRows(true)))}>
+              Export grades (CSV)
             </button>
-            <button className="g-ghost small" onClick={() => download(`grades_detail_${run.id}.csv`, toCsv(exportRows(false)))}>
-              Detail (one row per item)
-            </button>
-            <a className="g-ghost small" href={api.predictionsUrl(run.id)}>
-              predictions.csv (benchmark format)
-            </a>
-            {Object.keys(idMap).length > 0 && (
-              <button
-                className="g-ghost small"
-                onClick={() =>
-                  download("id_key.csv", toCsv([["one_time_id", "student_id"], ...Object.entries(idMap)]))
-                }
-              >
-                ID key
-              </button>
-            )}
+            <span className="g-hint">
+              One row per student: 1 or 0 for each item, points, and how many items still need review. Flagged items are
+              always in the review queue.
+            </span>
           </div>
         </section>
 
-        {metrics?.run && <MetricsPanel m={metrics} />}
+        {compare && metrics?.run && <MetricsPanel m={metrics} />}
 
-        {layout.map(({ problem, crits, resps }) => {
+        {layout.map(({ version, crits, resps }) => {
           const rows = onlyReview
             ? resps.filter((r) =>
                 crits.some((c) => {
@@ -247,9 +385,12 @@ export function Results({ assessment, run, idMap, hardFlags, onRunChange, onErro
               )
             : resps;
           return (
-            <section className="g-card" key={problem.id}>
+            <section className="g-card" key={version.id}>
               <h3>
-                Problem {problem.id} <span className="g-muted">· {rows.length} of {resps.length} students shown</span>
+                {legacy ? "Problem" : "Version"} {version.id}{" "}
+                <span className="g-muted">
+                  · {rows.length} of {resps.length} students shown
+                </span>
               </h3>
               <div className="g-table-wrap">
                 <table className="g-grid">
@@ -271,8 +412,8 @@ export function Results({ assessment, run, idMap, hardFlags, onRunChange, onErro
                         response={r}
                         crits={crits}
                         cells={cells}
-                        label={displayId(r)}
-                        references={compare ? assessment.references : {}}
+                        label={name(r)}
+                        references={compare ? bank.references : {}}
                         threshold={threshold}
                         hardFlags={hardFlags}
                         selected={selected}
@@ -285,14 +426,26 @@ export function Results({ assessment, run, idMap, hardFlags, onRunChange, onErro
             </section>
           );
         })}
-      </div>
+        {layout.length === 0 && (
+          <section className="g-card">
+            <p className="g-muted">
+              {run.cells.length
+                ? "None of the responses this run graded are attached to the bank any more."
+                : "This run has no grades."}
+            </p>
+          </section>
+        )}
+      </StepLayout>
 
       {selected && cells.get(selected) && (
         <CellDrawer
           runId={run.id}
           compact={cells.get(selected)!}
-          assessment={assessment}
-          displayId={displayId}
+          bank={bank}
+          versions={versions}
+          recorded={recorded}
+          revised={revised}
+          name={name}
           queueLength={queue.length}
           onDecide={decide}
           onNext={next}
@@ -315,10 +468,10 @@ function GridRow({
   onSelect,
 }: {
   response: ResponseItem;
-  crits: Criterion[];
+  crits: RubricItem[];
   cells: Map<string, CellCompact>;
   label: string;
-  references: Assessment["references"];
+  references: Bank["references"];
   threshold: number;
   hardFlags: string[];
   selected: string | null;
@@ -352,7 +505,7 @@ function GridRow({
       .join(" · ");
     return (
       <td key={c.id}>
-        <button className={classes} title={title} onClick={() => onSelect(iid)}>
+        <button className={classes} title={title} aria-label={`${label}, ${c.label}: ${cell.final ?? "pending"}`} onClick={() => onSelect(iid)}>
           {cell.final ?? "…"}
         </button>
       </td>
@@ -365,7 +518,7 @@ function GridRow({
       </td>
       {tds}
       <td className="g-total">
-        {points}/{max}
+        {tidy(points)}/{tidy(max)}
       </td>
     </tr>
   );
@@ -404,9 +557,9 @@ function MetricsPanel({ m }: { m: Metrics }) {
       </table>
       <p className="g-muted">
         Item level: accuracy {pct(r.overall.item_acc_ref_a)} vs A, {pct(r.overall.item_acc_ref_b)} vs B; macro-F1{" "}
-        {f2(r.overall.macro_f1_ref_a)} / {f2(r.overall.macro_f1_ref_b)}. Humans vs each other: accuracy{" "}
-        {pct(h?.overall.item_acc_ref_a)}, macro-F1 {f2(h?.overall.macro_f1_ref_a)}. Scored by the kit's evaluate.py on{" "}
-        {r.n_covered}/{r.n_instances} items.
+        {f2(r.overall.macro_f1_ref_a)} / {f2(r.overall.macro_f1_ref_b)}. Humans vs each other, over the whole example:
+        accuracy {pct(h?.overall.item_acc_ref_a)}, macro-F1 {f2(h?.overall.macro_f1_ref_a)}. Scored by the kit's
+        evaluate.py on {r.n_covered} of the example's {r.n_instances} items.
       </p>
       {r.confidence && (
         <p className="g-muted">
@@ -423,8 +576,11 @@ function MetricsPanel({ m }: { m: Metrics }) {
 function CellDrawer({
   runId,
   compact,
-  assessment,
-  displayId,
+  bank,
+  versions,
+  recorded,
+  revised,
+  name,
   queueLength,
   onDecide,
   onNext,
@@ -432,8 +588,11 @@ function CellDrawer({
 }: {
   runId: string;
   compact: CellCompact;
-  assessment: Assessment;
-  displayId: (r: ResponseItem) => string;
+  bank: Bank;
+  versions: RubricVersion[];
+  recorded: boolean;
+  revised: boolean;
+  name: (r: ResponseItem) => string;
   queueLength: number;
   onDecide: (iid: string, final: number | null) => Promise<void>;
   onNext: () => void;
@@ -452,17 +611,18 @@ function CellDrawer({
     };
   }, [runId, iid, compact.final, compact.override, compact.votes]);
 
-  const response = assessment.responses.find((r) => r.id === compact.response_id);
-  const criterion = assessment.criteria.find((c) => c.id === compact.criterion_id);
+  const response = bank.responses.find((r) => r.id === compact.response_id);
+  const criterion = versions.flatMap((v) => v.items).find((c) => c.id === compact.criterion_id);
   if (!response || !criterion) return null;
-  const ref = assessment.references[iid];
+  const ref = bank.references[iid];
   const evidence = (cell?.samples ?? []).filter((s) => s.verdict === compact.final).flatMap((s) => s.evidence);
+  const current = bank.criteria.find((c) => c.id === criterion.id);
 
   return (
     <aside className="g-drawer">
       <div className="g-row between">
         <h3>
-          {displayId(response)} · {criterion.label}
+          {name(response)} · {criterion.label}
         </h3>
         <button className="g-ghost small" onClick={onClose} aria-label="Close">
           ✕
@@ -504,8 +664,31 @@ function CellDrawer({
           Human graders: A = {ref.ref_a}, B = {ref.ref_b}
         </p>
       )}
-      <h4>Rubric item</h4>
+      <h4>Rubric item {recorded ? "as this run used it" : ""}</h4>
       <pre className="g-pre">{criterion.text}</pre>
+      {(criterion.accept?.length ?? 0) > 0 && (
+        <>
+          <p className="g-hint">Acceptable forms</p>
+          <ul className="g-details-list">{criterion.accept!.map((a) => <li key={a}>{a}</li>)}</ul>
+        </>
+      )}
+      {(criterion.reject?.length ?? 0) > 0 && (
+        <>
+          <p className="g-hint">Does not count</p>
+          <ul className="g-details-list">{criterion.reject!.map((a) => <li key={a}>{a}</li>)}</ul>
+        </>
+      )}
+      {!recorded && <p className="g-hint">Rubric not recorded for this run. This is the bank's current wording.</p>}
+      {revised && (
+        <p className="g-hint">
+          The rubric has been revised since this run.
+          {current && current.text.trim() !== criterion.text.trim()
+            ? " This item reads differently now."
+            : current
+              ? " This item's wording is unchanged."
+              : " Its version or this item has been renamed or removed."}
+        </p>
+      )}
       <h4>Response {evidence.length > 0 && <span className="g-hint">(highlighted: quotes the winning votes relied on)</span>}</h4>
       <div className="g-response">{highlight(response.text, evidence)}</div>
       <h4>Votes</h4>
@@ -519,7 +702,16 @@ function CellDrawer({
             {s.cached && <span className="g-tag">cached</span>}
             {s.quotes_found === false && <span className="g-tag warn">quote not found in response</span>}
           </div>
-          <p>{s.comparison || s.error}</p>
+          <p>
+            {s.comparison ||
+              (s.verdict === null ? "This vote failed: the model gave no answer. Grade again to retry it." : "")}
+          </p>
+          {s.error && (
+            <details>
+              <summary>Details</summary>
+              <pre className="g-pre">{s.error}</pre>
+            </details>
+          )}
           {s.evidence.length > 0 && (
             <ul>
               {s.evidence.map((q, j) => (

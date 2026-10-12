@@ -42,7 +42,9 @@
 
 .g-main { padding: 18px 22px 40px; }
 .g-stack { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
-.g-grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 14px; }
+/* A step: its default action on the left, its collapsed side box on the right. */
+.g-two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 370px); gap: 14px; align-items: start; }
+@media (max-width: 1000px) { .g-two { grid-template-columns: minmax(0, 1fr); } }
 
 .g-card {
   background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
@@ -61,12 +63,14 @@
 
 .g-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
 .g-field { display: flex; flex-direction: column; gap: 5px; font-size: 0.85rem; margin: 10px 0; }
-.g-field input, .g-field select, .g-field textarea, .g-crit textarea {
+/* :where() keeps this base look easy to override (see .needed below). */
+.g-main :where(input:not([type="checkbox"]):not([type="range"]), select, textarea) {
   background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px;
   padding: 8px 10px; font: inherit; font-size: 0.88rem;
 }
-.g-field input[type="file"] { padding: 6px; }
-.g-field textarea, .g-crit textarea { resize: vertical; line-height: 1.4; }
+.g-main input[type="file"] { padding: 6px; }
+.g-main textarea { width: 100%; resize: vertical; line-height: 1.4; }
+.g-main select { padding: 6px 8px; }
 .g-check { display: inline-flex; align-items: center; gap: 6px; font-size: 0.85rem; }
 
 .g-primary, .g-ghost, .g-danger {
@@ -88,8 +92,6 @@ summary { cursor: pointer; color: var(--muted); }
   background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin: 6px 0;
   line-height: 1.45;
 }
-.g-crit { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 10px; }
-.g-crit textarea { width: 100%; margin-top: 6px; font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 0.8rem; }
 .g-orig { flex: 1; }
 
 .g-bar { height: 8px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; overflow: hidden; margin: 8px 0; }
@@ -153,3 +155,103 @@ summary { cursor: pointer; color: var(--muted); }
 .g-chip.err { background: #7f1d1d; color: #fee2e2; }
 .g-tag { font-size: 0.7rem; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; }
 .g-tag.warn { color: #fbbf24; border-color: #fbbf24; }
+
+/* --- side boxes: everything that is not a step's default action ------------- */
+.g-side { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; margin: 0; }
+.g-side > summary { padding: 12px 16px; font-size: 0.9rem; font-weight: 600; color: var(--text); }
+.g-side[open] > summary { border-bottom: 1px solid var(--border); }
+.g-side-body { padding: 2px 16px 14px; }
+.g-side-body h4 {
+  margin: 16px 0 6px; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted);
+}
+.g-side-body .g-field { margin: 8px 0; }
+.g-main textarea.g-paste { margin-top: 6px; font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 0.78rem; }
+
+/* --- boxes to fill ---------------------------------------------------------- */
+/* An empty box that is needed. Amber, never red: it is a prompt, not an error. */
+.g-main .needed { border-color: #f59e0b; background: #f59e0b14; box-shadow: 0 0 0 1px #f59e0b55; }
+.g-need { color: #fbbf24; font-size: 0.78rem; }
+.flash { animation: g-flash 1.4s ease-out; }
+@keyframes g-flash {
+  0%, 55% { box-shadow: 0 0 0 4px #f59e0baa; }
+  100% { box-shadow: 0 0 0 1px #f59e0b55; }
+}
+.g-empty { border: 1px dashed #f59e0b; border-radius: 10px; padding: 10px 14px; font-size: 0.86rem; }
+.g-empty p { margin: 0; color: #fde68a; }
+
+/* A box code filled from the file. */
+.g-mark {
+  display: inline-block; font-size: 0.68rem; font-weight: 600; color: #7dd3fc; background: #0ea5e91f;
+  border: 1px solid #0ea5e966; border-radius: 999px; padding: 1px 8px; white-space: nowrap; cursor: help;
+  vertical-align: middle;
+}
+.g-filled {
+  border: 1px solid #0ea5e944; background: #0ea5e90f; border-radius: 8px; padding: 8px 12px; margin: 10px 0;
+  font-size: 0.84rem; line-height: 1.45;
+}
+.g-filled p { margin: 0 0 4px; }
+.g-filled ul { margin: 4px 0; padding-left: 18px; color: #cbd5e1; }
+
+.g-callout {
+  background: #f59e0b14; border: 1px solid #f59e0b55; border-left: 3px solid #f59e0b; border-radius: 8px;
+  padding: 8px 12px; font-size: 0.86rem; line-height: 1.45; margin: 10px 0; color: #fde68a;
+}
+.g-ok { color: #86efac; font-size: 0.86rem; margin: 10px 0; }
+.g-count {
+  display: block; background: #f59e0b22; color: #fde68a; border: 1px solid #f59e0b; border-radius: 8px;
+  padding: 7px 12px; font: inherit; font-size: 0.86rem; font-weight: 600; cursor: pointer; margin: 10px 0;
+}
+.g-count:hover { background: #f59e0b33; }
+/* A button that is off because something is still missing. It stays clickable: it
+   takes the owner to the first empty box. */
+.g-primary.off { background: #334155; border-color: #475569; color: #cbd5e1; font-weight: 500; }
+.g-primary.off:hover:not(:disabled) { filter: none; border-color: #f59e0b; }
+
+.g-status {
+  font-size: 0.72rem; font-weight: 600; border-radius: 999px; padding: 2px 10px; margin-left: 6px;
+  border: 1px solid var(--border); color: var(--muted); vertical-align: middle; white-space: nowrap;
+}
+.g-status.ok { color: #86efac; border-color: #166534; background: #16653433; }
+
+/* --- rubric panels ---------------------------------------------------------- */
+/* The version panels, as one group that can be locked while a change is on its way. */
+.g-boxes { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+.g-boxes:disabled { opacity: 0.7; }
+.g-inline { display: inline-flex; align-items: center; gap: 8px; font-size: 0.85rem; }
+.g-main input.g-idbox { width: 14ch; font-weight: 600; padding: 5px 8px; }
+.g-version-head { margin-top: 0; }
+.g-inner { margin: 8px 0; }
+.g-inner textarea { margin-top: 6px; }
+.g-item { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 10px; }
+.g-item-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 0.86rem; }
+.g-item-head .g-remove { margin-left: auto; }
+.g-item-boxes { display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 10px; margin-top: 6px; align-items: start; }
+@media (max-width: 640px) { .g-item-boxes { grid-template-columns: minmax(0, 1fr); } }
+.g-item-text { display: flex; flex-direction: column; gap: 4px; }
+.g-weight { display: flex; flex-direction: column; gap: 4px; font-size: 0.8rem; color: var(--muted); }
+.g-main .g-weight input { width: 100%; }
+
+/* --- lists ------------------------------------------------------------------ */
+.g-details-list { margin: 6px 0; padding-left: 18px; font-size: 0.8rem; line-height: 1.45; color: #cbd5e1; }
+.g-banks { list-style: none; margin: 6px 0 10px; padding: 0; }
+.g-banks li { border-top: 1px solid var(--border); padding: 8px 0; font-size: 0.85rem; }
+.g-banks .g-tag { margin-left: 6px; }
+.g-runs { list-style: none; margin: 6px 0; padding: 0; font-size: 0.8rem; }
+.g-runs li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 4px 0; }
+.g-reasons { margin: 6px 0; padding-left: 18px; line-height: 1.7; }
+.g-link-button {
+  background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-size: 0.86rem; cursor: pointer;
+  text-decoration: underline; text-align: left;
+}
+.g-confirm {
+  border: 1px solid #991b1b; background: #7f1d1d33; border-radius: 8px; padding: 8px 10px; font-size: 0.82rem;
+  line-height: 1.45; margin: 6px 0;
+}
+.g-confirm p { margin: 0; }
+.g-held { margin-top: 10px; }
+.g-group {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  border-top: 1px solid var(--border); padding: 8px 0; font-size: 0.86rem;
+}
+.g-scroll { max-height: 320px; overflow-y: auto; }
+.g-disabled { opacity: 0.55; }

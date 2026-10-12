@@ -5,7 +5,8 @@ is self-contained: the only DemoBuilder imports are ``app.config`` and ``app.llm
 Moving it to its own repo later is a copy of this package plus ``app/llm``.
 
     model.py      internal data model (every input format is adapted into it)
-    adapters.py   Chen & Wan kit + generic CSV  ->  Assessment
+    adapters.py   Chen & Wan kit, Problem Info CSV, responses CSV  ->  the model, plus findings
+    rubric.py     a bank's rubric lifecycle: check, hash, approve, unlock, edits, copy
     grade.py      one LLM call: (problem, criterion, response) -> Sample
     aggregate.py  k samples -> binary final, confidence, review flags
     runner.py     batch runs: concurrency cap, cache, progress, cancel
