@@ -1,54 +1,111 @@
 """Internal data model.
 
-Every input format (the Chen & Wan kit, a teacher's CSV, later a free-text rubric)
+Every input format (the Chen & Wan kit, a Problem Info CSV, later a free-text rubric)
 is translated into these objects by an adapter; nothing downstream knows where the
 data came from. Ids are opaque strings — never parse meaning out of them.
+
+An ``Assessment`` is one **problem bank**: one problem in one or more isomorphic
+versions. Its ``problems`` are the versions. Every field added after the MVP has a
+default, so files saved by the MVP still load (they come back as ``kind="legacy"``).
 """
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+import hashlib
+from typing import Annotated, Literal
+
+from pydantic import AfterValidator, BaseModel, Field
+
+
+def clean_text(text: str) -> str:
+    """Text as it can be saved. A lone surrogate (half of an emoji, which a paste or
+    a cut-off string can carry) cannot be written as UTF-8, so it becomes U+FFFD."""
+    try:
+        text.encode("utf-8")
+        return text
+    except UnicodeEncodeError:
+        return text.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
+
+
+# For text that arrives from outside (request bodies): cleaned when it is validated.
+Text = Annotated[str, AfterValidator(clean_text)]
+
+
+def text_fingerprint(text: str) -> str:
+    """A short hash of a response's exact text."""
+    return hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()[:16]
 
 
 class Problem(BaseModel):
+    """One version of the bank's problem."""
+
     id: str
-    text: str
+    text: str = ""          # may be empty after a soft upload; editable while the rubric is a draft
     instructions: str = ""  # what students were told to write, if known
 
 
 class Criterion(BaseModel):
     """One binary rubric item: the response earns it (1) or doesn't (0)."""
 
-    id: str                 # unique within the assessment, e.g. "Q1#1"
-    problem_id: str
-    key: str                # per-problem key; instance ids are "<response_id>#<key>"
+    id: str                 # unique within the bank, e.g. "v1#1"
+    problem_id: str         # the version this item belongs to
+    key: str                # per-version key; instance ids are "<response_id>#<key>"
     label: str              # display label, e.g. "Item 1"
-    text: str               # the wording the grader uses (editable in review)
+    text: str = ""          # the statement the grader is told
     source_text: str = ""   # the teacher's original wording, kept for reference
-    points: float = 1.0
+    points: float = 1.0     # the weight; 0 means "not set yet"
+    accept: list[str] = Field(default_factory=list)   # acceptable forms (used from Phase 2)
+    reject: list[str] = Field(default_factory=list)   # "does not count" exclusions (Phase 2)
+    origin: str = "teacher"  # teacher | copied | ai | ai_inferred
 
 
 class Response(BaseModel):
     id: str                 # opaque; a one-time pseudonym is fine
-    problem_id: str
-    text: str
-    external_id: str = ""   # the id exactly as uploaded (before any problem prefix)
+    problem_id: str = ""    # the version it answers; "" means "version unknown"
+    text: str = ""
+    external_id: str = ""   # the id exactly as uploaded
+    version_label: str = ""  # the version exactly as uploaded
+    excluded: bool = False  # deliberately left out of grading
+
+
+class Finding(BaseModel):
+    """Something intake noticed in an upload. Findings are history: the live
+    ``rubric.check`` decides what currently blocks approval or grading."""
+
+    code: str                                   # stable tag, e.g. "weight_filled"
+    message: str                                # one plain sentence
+    filled: Literal["code", "owner", "note"]    # code filled it | the owner must | just a note
+    scope: Literal["rubric", "responses"] = "rubric"
+    # Which box it belongs to: version_id, version_text, items, item_key, item_text,
+    # weight, student_id, response_version, or file (the upload as a whole).
+    box: str = "file"
+    problem_id: str = ""
+    item_key: str = ""
+    response_id: str = ""
+    value: str = ""         # what code filled in; the mark shows while the box still holds it
+    row: int | None = None  # spreadsheet row, for the details view only
 
 
 class Assessment(BaseModel):
     id: str = ""
     name: str
     source: str             # "example:chen" | "csv"
-    rubric_version: str = ""
-    problems: list[Problem]
-    criteria: list[Criterion]
-    responses: list[Response]
+    kind: str = "legacy"    # "bank" for everything created from now on
+    rubric_version: str = ""  # the example's rubric wording, or "uploaded"
+    problems: list[Problem] = Field(default_factory=list)
+    criteria: list[Criterion] = Field(default_factory=list)
+    responses: list[Response] = Field(default_factory=list)
     # instance_id -> {"ref_a": 0/1, "ref_b": 0/1}. Evaluation only; never sent to the model.
     references: dict[str, dict[str, int]] = Field(default_factory=dict)
     created: float = 0.0
 
-    def problem(self, problem_id: str) -> Problem:
-        return next(p for p in self.problems if p.id == problem_id)
+    rubric_status: str = "draft"            # draft | approved (locked)
+    rubric_hash: str = ""                   # of the last approved rubric (rubric.spec_hash)
+    rubric_revision: int = 0                # 0 until the first approval
+    rubric_approved_at: float | None = None
+    findings: list[Finding] = Field(default_factory=list)
+    held_responses_csv: str = ""            # from the all-at-once shortcut; untouched until approval
+    ai_fill: bool = False                   # "let the AI fill gaps". Stored now, used from Phase 2
 
     def criteria_for(self, problem_id: str) -> list[Criterion]:
         return [c for c in self.criteria if c.problem_id == problem_id]
@@ -58,10 +115,13 @@ class Assessment(BaseModel):
         problem_ids: list[str] | None = None,
         max_responses: int | None = None,
     ) -> list[tuple[Response, Criterion]]:
-        """Every (response, criterion) pair to grade, optionally narrowed."""
+        """Every (response, criterion) pair to grade, optionally narrowed. Responses
+        that are left out, or whose version is unknown, are never graded."""
         out: list[tuple[Response, Criterion]] = []
         seen: dict[str, int] = {}
         for r in self.responses:
+            if r.excluded or not r.problem_id:
+                continue
             if problem_ids and r.problem_id not in problem_ids:
                 continue
             seen[r.problem_id] = seen.get(r.problem_id, 0) + 1

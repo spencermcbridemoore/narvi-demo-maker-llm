@@ -62,6 +62,20 @@ def _fill(template: str, **values: str) -> str:
     return _SLOT.sub(lambda m: values[m.group(1)], template)
 
 
+def criterion_text(criterion: Criterion) -> str:
+    """The rubric item as the grader is told it: the statement, then its acceptable
+    forms and its exclusions. With both lists empty this is the statement alone,
+    byte for byte what was sent before the lists existed, so cached samples stay valid."""
+    text = criterion.text.strip()
+    accept = [a.strip() for a in criterion.accept if a.strip()]
+    reject = [r.strip() for r in criterion.reject if r.strip()]
+    if accept:
+        text += "\n\nAcceptable forms:\n" + "\n".join(f"- {a}" for a in accept)
+    if reject:
+        text += "\n\nDoes not count:\n" + "\n".join(f"- {r}" for r in reject)
+    return text
+
+
 def build_messages(problem: Problem, criterion: Criterion, response: Response) -> list[tuple[str, str]]:
     instructions_block = (
         f"\nWHAT STUDENTS WERE ASKED TO WRITE\n<instructions>\n{problem.instructions.strip()}\n</instructions>\n"
@@ -73,7 +87,7 @@ def build_messages(problem: Problem, criterion: Criterion, response: Response) -
         instructions_block=instructions_block,
         response=response.text.strip() or "(empty response)",
         label=criterion.label,
-        criterion=criterion.text.strip(),
+        criterion=criterion_text(criterion),
     )
     return [("system", SYSTEM_TEMPLATE), ("human", user)]
 

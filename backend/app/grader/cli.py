@@ -2,10 +2,14 @@
 
     cd backend
     ../.venv/Scripts/python -m app.grader.cli --rubric simple --k 3
-    ../.venv/Scripts/python -m app.grader.cli --rubric detailed_latest --problems Q2 --max-responses 5
+    ../.venv/Scripts/python -m app.grader.cli --rubric detailed_latest --problem Q2 --max-responses 5
 
-Same runner and cache as the web app, so numbers here are the app's behavior.
-Writes predictions (the kit's CSV format) under GRADER_DATA_DIR/cli/.
+``--problem Q2`` grades one problem as its own bank, the way the app loads the example.
+Without it the whole kit is graded (``--problems Q1,Q3`` narrows that run).
+
+Same runner and cache as the web app, so numbers here are the app's behavior. The
+kit's rubric is approved in code first, so this goes through the same lifecycle as
+every other run. Writes predictions (the kit's CSV format) under GRADER_DATA_DIR/cli/.
 """
 
 from __future__ import annotations
@@ -15,7 +19,7 @@ import asyncio
 import csv
 import time
 
-from . import metrics, runner, store
+from . import metrics, rubric, runner, store
 from .adapters import CHEN_VERSIONS, load_chen
 from .grade import EFFORTS
 
@@ -30,21 +34,33 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--k", type=int, default=3, help="samples per (response, item); odd avoids ties")
     ap.add_argument("--effort", default="minimal", choices=EFFORTS)
     ap.add_argument("--concurrency", type=int, default=6)
-    ap.add_argument("--problems", default="", help="comma-separated problem ids, e.g. Q1,Q3")
+    which = ap.add_mutually_exclusive_group()
+    which.add_argument("--problem", default="", help="one problem as its own bank, e.g. Q2")
+    which.add_argument("--problems", default="",
+                       help="whole kit, narrowed to these comma-separated problem ids, e.g. Q1,Q3")
     ap.add_argument("--max-responses", type=int, default=None, help="per problem")
     args = ap.parse_args(argv)
 
-    assessment = load_chen(args.rubric)
+    try:
+        assessment = load_chen(args.rubric, problem=args.problem or None)
+    except ValueError as exc:
+        ap.error(str(exc))
     assessment.id = f"cli{int(time.time())}"
+    assessment.created = time.time()
+    rubric.approve(assessment)
     store.save_assessment(assessment)
     config = runner.RunConfig(
         k=args.k, effort=args.effort, concurrency=args.concurrency,
         problem_ids=[p for p in args.problems.split(",") if p] or None,
         max_responses=args.max_responses,
     )
-    run = runner.new_run(assessment, config)
+    try:
+        run = runner.new_run(assessment, config)
+    except rubric.Refusal as exc:
+        ap.error("; ".join([exc.message, *(b["message"] for b in exc.boxes)]))
     print(f"run {run.id}: {len(run.cells)} pairs x k={args.k} = {run.total_calls} calls "
-          f"on {run.model} (effort {args.effort}, rubric {args.rubric}, prompt {run.prompt_version})")
+          f"on {run.model} (effort {args.effort}, rubric {args.rubric} rev {run.rubric_revision} "
+          f"{run.rubric_hash}, prompt {run.prompt_version})")
 
     t0, last = time.time(), [0.0]
 
