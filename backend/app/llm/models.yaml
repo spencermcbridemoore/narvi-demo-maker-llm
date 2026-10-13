@@ -18,6 +18,7 @@ roles:
   review: mid        # summarize what the user sees
   diagnose: mid      # interpret what's broken
   grade: mid         # rubric grader: one binary rubric item per call (app.grader)
+  rubric: strong     # rubric drafting: a version's rubric per call (app.grader.draft)
 
 profiles:
   # Azure OpenAI. Endpoint/key/api-version come from env (AZURE_OPENAI_ENDPOINT,

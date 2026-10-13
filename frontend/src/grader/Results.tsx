@@ -19,6 +19,7 @@ import {
   type RunSummary,
 } from "./api";
 import { download, toCsv } from "./csv";
+import { OriginMark } from "./Drafts";
 import { ConfirmButton, RunProblem, SideBox, StepLayout, deleteBankQuestion, fmtDate, isLegacy } from "./parts";
 import { displayId, errMsg, f2, fmtInt, pct } from "./util";
 
@@ -664,7 +665,9 @@ function CellDrawer({
           Human graders: A = {ref.ref_a}, B = {ref.ref_b}
         </p>
       )}
-      <h4>Rubric item {recorded ? "as this run used it" : ""}</h4>
+      <h4>
+        Rubric item {recorded ? "as this run used it" : ""} <OriginMark origin={criterion.origin} />
+      </h4>
       <pre className="g-pre">{criterion.text}</pre>
       {(criterion.accept?.length ?? 0) > 0 && (
         <>

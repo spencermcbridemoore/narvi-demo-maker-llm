@@ -184,7 +184,10 @@ export default function GraderApp() {
         </h1>
         <span className="g-sub">one problem bank at a time · binary rubric items · you review the uncertain grades</span>
         {health && (
-          <span className="g-badge" title={`prompt version ${health.prompt_version}`}>
+          <span
+            className="g-badge"
+            title={`Grading: ${health.model}, prompt version ${health.prompt_version}. Rubric drafting: ${health.draft_model ?? "not available"}, prompt version ${health.draft_prompt_version ?? "none"}.`}
+          >
             {health.profile} · {health.model}
           </span>
         )}
@@ -241,6 +244,7 @@ export default function GraderApp() {
             runCount={runs.length}
             onBank={setBank}
             onError={setError}
+            onNotice={setNotice}
             onNext={() => setStep("responses")}
           />
         )}
@@ -333,6 +337,7 @@ function ProblemStep({
   const [pseudonymize, setPseudonymize] = useState(true);
   const [pastedInfo, setPastedInfo] = useState("");
   const [pastedResponses, setPastedResponses] = useState("");
+  const [material, setMaterial] = useState("");
   const [banks, setBanks] = useState<BankSummary[] | null>(null);
 
   const loadBanks = useCallback(() => {
@@ -470,7 +475,33 @@ function ProblemStep({
       </div>
 
       <h4>Paste unstructured material</h4>
-      <p className="g-hint">Paste a problem, a solution or grading notes and get a draft rubric. Not built yet.</p>
+      <p className="g-hint">
+        Paste a problem with its solution, your grading notes or a point scheme, in any form. The AI drafts a problem
+        bank from it: the problem text and rubric items. Nothing it writes is used until you accept it on the next
+        step. Do not paste student work: the text goes to the AI as it is.
+      </p>
+      <textarea
+        className="g-paste"
+        rows={5}
+        value={material}
+        onChange={(e) => setMaterial(e.target.value)}
+        placeholder={"Problem: …\nSolution: …\nGrading notes: …"}
+        aria-label="Unstructured material"
+      />
+      <div className="g-row">
+        <button
+          className="g-ghost small"
+          disabled={busy || !material.trim()}
+          onClick={() =>
+            guard(async () => {
+              onCreated(await api.draftFromMaterial(name.trim(), material));
+              setMaterial("");
+            })
+          }
+        >
+          Draft a rubric from this
+        </button>
+      </div>
 
       <h4>Saved problem banks</h4>
       {banks === null && <p className="g-hint">Loading…</p>}

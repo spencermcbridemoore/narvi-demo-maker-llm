@@ -1,0 +1,15 @@
+For each rubric item below, suggest acceptable_forms and does_not_count.
+
+The statements are the instructor's and are not yours to change. Do not restate them, and do not change what an item requires: do not make it stricter or looser. Only spell out, for this problem, what the statement already means:
+- acceptable_forms: other correct ways a student could express what the item asks for, such as an equation in place of words, equivalent notation, or a description in words in place of an equation.
+- does_not_count: near misses that the statement, read carefully, excludes.
+
+- Return each item under its item_key.
+- Do not repeat entries an item already has.
+- Give at most {{max_lines}} entries per list. Fewer is fine, and so is none.
+- note: leave it empty. Only if you would have to decide what the instructor meant, do not decide: leave that entry out, and put the question in note, in one plain sentence.
+
+PROBLEM
+{{problem}}
+{{instructions}}RUBRIC ITEMS
+{{items}}

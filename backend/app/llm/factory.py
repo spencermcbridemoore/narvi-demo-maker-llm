@@ -34,6 +34,7 @@ class Role(str, Enum):
     REVIEW = "review"          # mid
     DIAGNOSE = "diagnose"      # mid
     GRADE = "grade"            # mid — rubric grader (app.grader), many small calls
+    RUBRIC = "rubric"          # strong — rubric drafting (app.grader.draft), a few larger calls
 
 
 @lru_cache(maxsize=1)

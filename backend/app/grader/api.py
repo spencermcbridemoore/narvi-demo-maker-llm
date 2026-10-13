@@ -1,8 +1,8 @@
 """FastAPI router for the grader, mounted by app.main at /grader/api.
 
-Flow: create a problem bank (a Problem Info CSV, or one problem of the Chen example)
--> finish and approve its rubric -> attach responses -> start a run -> poll it ->
-inspect cells, override, export.
+Flow: create a problem bank (a Problem Info CSV, one problem of the Chen example, or
+pasted material) -> finish and approve its rubric, by hand or by accepting AI drafts
+-> attach responses -> start a run -> poll it -> inspect cells, override, export.
 
 The hard stops live here and in ``rubric``/``runner``, not only in the UI. Every
 refusal answers with ``{"detail": {"message": <a plain sentence>, "boxes": [...]}}``:
@@ -26,7 +26,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from ..config import LLM_PROFILE
-from . import metrics, rubric, runner, store
+from . import draft, metrics, rubric, runner, store
 from .adapters import (
     CHEN_SOURCE, CHEN_VERSIONS, NothingToLoad, chen_problems, chen_responses, kit_dir, load_chen,
     load_problem_info, parse_responses, problem_info_csv,
@@ -39,6 +39,9 @@ router = APIRouter(prefix="/grader/api", tags=["grader"])
 
 GRADING_IN_PROGRESS = (
     "Grading is in progress for this problem bank. Wait for it to finish, or cancel it first."
+)
+DRAFTING_IN_PROGRESS = (
+    "The AI is still drafting for this problem bank. Wait for it to finish, or cancel it first."
 )
 UNREADABLE = "This saved problem bank cannot be read. It can only be deleted."
 
@@ -85,13 +88,20 @@ def _held_count(a: Assessment) -> int:
 def _bank(a: Assessment, **extra) -> dict:
     """A bank as the UI sees it: the saved bank plus the live check. Held responses
     are counted, not shown: they stay untouched until the rubric is approved. Each
-    response carries the fingerprint of its text, to line it up with a run's grades."""
-    out = a.model_dump(exclude={"held_responses_csv"})
+    response carries the fingerprint of its text, to line it up with a run's grades.
+    Each AI draft says whether what it was made from has changed since (``stale``);
+    ``drafting`` is the draft being written, and ``ai`` what could be drafted now."""
+    out = a.model_dump(exclude={"held_responses_csv", "material"})
     for response, shown in zip(a.responses, out["responses"]):
         shown["fingerprint"] = text_fingerprint(response.text)
+    for proposal, shown in zip(a.proposals, out["proposals"]):
+        shown["stale"] = draft.is_stale(a, proposal)
     out["held_responses"] = _held_count(a)
+    out["has_material"] = bool(a.material)
     out["check"] = rubric.check(a)
     out["running"] = runner.is_running(a.id)
+    out["drafting"] = draft.status(a.id)
+    out["ai"] = draft.options(a)
     out.update(extra)
     return out
 
@@ -118,13 +128,19 @@ def _not_while_grading(aid: str) -> None:
         raise _stop(409, GRADING_IN_PROGRESS)
 
 
+def _not_while_drafting(aid: str) -> None:
+    if draft.is_drafting(aid):
+        raise _stop(409, DRAFTING_IN_PROGRESS)
+
+
 def _require_approved(a: Assessment) -> None:
     """No responses are attached before the rubric is approved."""
     if a.kind != "bank":
         raise _stop(409, rubric.LEGACY_SENTENCE)
     if a.rubric_status != "approved":
+        check = rubric.check(a)
         raise _stop(409, "Responses can be added once the rubric is approved.",
-                    rubric.check(a)["to_fill"])
+                    check["to_fill"] + check["to_decide"])
 
 
 def _run_payload(run: runner.Run) -> dict:
@@ -135,12 +151,15 @@ def _run_payload(run: runner.Run) -> dict:
 
 @router.get("/health")
 async def health():
-    try:
-        model = model_name()
-    except Exception as exc:  # e.g. Azure env vars missing
-        model = f"unavailable ({type(exc).__name__})"
+    def name(of: Callable[[], str]) -> str:
+        try:
+            return of()
+        except Exception as exc:  # e.g. Azure env vars missing
+            return f"unavailable ({type(exc).__name__})"
+
     return {
-        "ok": True, "profile": LLM_PROFILE, "model": model, "prompt_version": PROMPT_VERSION,
+        "ok": True, "profile": LLM_PROFILE, "model": name(model_name), "prompt_version": PROMPT_VERSION,
+        "draft_model": name(draft.model_name), "draft_prompt_version": draft.DRAFT_PROMPT_VERSION,
         "kit": kit_dir() is not None, "efforts": list(EFFORTS), "hard_flags": list(HARD_FLAGS),
     }
 
@@ -224,6 +243,24 @@ async def assessment_from_example(body: ExampleIn):
     return _bank(_register(bank))
 
 
+class MaterialIn(BaseModel):
+    name: Text = ""
+    material: Text = ""
+
+
+@router.post("/assessments/material")
+async def assessment_from_material(body: MaterialIn):
+    """A draft bank from pasted unstructured material: one empty version, for which
+    the AI starts drafting a problem text and a rubric. The only error is an empty
+    paste. Nothing it drafts is part of the rubric until it is accepted."""
+    try:
+        bank = _register(draft.new_bank(body.material, body.name))
+    except NothingToLoad as exc:
+        raise _stop(400, str(exc))
+    draft.start(bank.id, *draft.plan(bank, "material"))
+    return _bank(bank)
+
+
 @router.get("/assessments/{aid}")
 async def get_assessment(aid: str):
     return _bank(_assessment(aid))
@@ -298,7 +335,9 @@ async def copy_rubric(aid: str, body: CopyIn):
 
 @router.post("/assessments/{aid}/rubric/approve")
 async def approve_rubric(aid: str):
-    """422 with the boxes still to fill, else lock: hash, revision and warnings."""
+    """422 with the boxes still to fill and the AI drafts still to decide, else lock:
+    hash, revision and warnings."""
+    _not_while_drafting(aid)
     return _change(aid, lambda a: {"warnings": rubric.approve(a)["warnings"]})
 
 
@@ -306,6 +345,94 @@ async def approve_rubric(aid: str):
 async def unlock_rubric(aid: str):
     _not_while_grading(aid)
     return _change(aid, rubric.unlock)
+
+
+# --- AI drafts ---------------------------------------------------------------
+
+class DraftIn(BaseModel):
+    mode: Text                              # example | material | text | elaborate (draft.py)
+    problem_ids: list[Text] | None = None   # the versions to draft for (default: what the mode is for)
+    example_id: Text = ""                   # example: the version to draft from (default: the first with items)
+    material: Text | None = None            # material: the pasted text (default: what was pasted before)
+
+
+@router.post("/assessments/{aid}/drafts")
+async def start_draft(aid: str, body: DraftIn):
+    """Ask the AI for a draft. It is written in the background: this answers at once,
+    and the bank's ``drafting`` says how far it is. What it writes is stored as
+    proposals, which are not part of the rubric until they are accepted."""
+    a = _working_copy(aid)
+    _not_while_grading(aid)
+    _not_while_drafting(aid)
+    try:
+        rubric.require_draft(a)
+        if body.mode == "material" and (body.material or "").strip():
+            draft.set_material(a, body.material)
+        calls, skipped = draft.plan(a, body.mode, body.problem_ids, body.example_id)
+    except rubric.Refusal as exc:
+        raise _refusal(exc)
+    store.save_assessment(a)    # with the pasted material, when there is any
+    draft.start(a.id, calls, skipped)
+    return _bank(a)
+
+
+@router.post("/assessments/{aid}/drafts/cancel")
+async def cancel_draft(aid: str):
+    """Stop the draft being written, or clear what is left to say about one that
+    failed. Proposals that are already there stay."""
+    a = _assessment(aid)
+    draft.cancel(aid)
+    return _bank(a)
+
+
+class AcceptIn(BaseModel):
+    proposal_id: Text
+    keys: list[Text] = Field(default_factory=list)  # the drafted items to accept
+    version_text: bool = False                      # ... and the drafted problem text
+
+
+@router.post("/assessments/{aid}/proposals/accept")
+async def accept_proposal(aid: str, body: AcceptIn):
+    """Copy drafted items into the rubric. What is inferred is accepted only when it
+    is asked for on its own; otherwise it is left waiting and named in ``left``."""
+    return _change(aid, lambda a: rubric.accept_proposal(
+        a, body.proposal_id, body.keys, body.version_text))
+
+
+class DiscardIn(BaseModel):
+    proposal_id: Text
+    keys: list[Text] | None = None      # None, and no version_text: the whole draft
+    version_text: bool = False
+
+
+@router.post("/assessments/{aid}/proposals/discard")
+async def discard_proposal(aid: str, body: DiscardIn):
+    def change(a: Assessment) -> None:
+        rubric.discard_proposal(a, body.proposal_id, body.keys, body.version_text)
+
+    return _change(aid, change)
+
+
+class AiFillIn(BaseModel):
+    on: bool
+
+
+@router.put("/assessments/{aid}/ai-fill")
+async def set_ai_fill(aid: str, body: AiFillIn):
+    """ "Let the AI fill gaps". Off, the AI drafts only when it is asked. Switching it
+    on drafts every empty rubric the AI can draft, without asking again; what it
+    drafts still waits to be accepted."""
+    a = _working_copy(aid)
+    if a.kind != "bank":
+        raise _stop(409, rubric.LEGACY_SENTENCE)
+    a.ai_fill = body.on
+    store.save_assessment(a)
+    if (body.on and a.rubric_status == "draft" and not draft.is_drafting(aid)
+            and not runner.is_running(aid)):
+        calls, skipped = draft.plan_fill(a)
+        if calls:
+            draft.start(a.id, calls, skipped)
+    return _bank(a)
 
 
 # --- responses ---------------------------------------------------------------
@@ -416,6 +543,7 @@ async def delete_assessment(aid: str):
     if not store.has_assessment_file(aid):
         raise _stop(404, "That problem bank was not found. It may have been deleted.")
     _not_while_grading(aid)
+    draft.cancel(aid)   # a draft still being written for it is dropped, not written back
     runs = runner.delete_runs_for(aid)
     samples = store.cache().delete_bank(aid)
     store.delete_assessment(aid)

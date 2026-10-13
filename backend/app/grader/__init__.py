@@ -6,7 +6,10 @@ Moving it to its own repo later is a copy of this package plus ``app/llm``.
 
     model.py      internal data model (every input format is adapted into it)
     adapters.py   Chen & Wan kit, Problem Info CSV, responses CSV  ->  the model, plus findings
-    rubric.py     a bank's rubric lifecycle: check, hash, approve, unlock, edits, copy
+    rubric.py     a bank's rubric lifecycle: check, hash, approve, unlock, edits, copy,
+                  and accepting or discarding AI drafts
+    draft.py      rubric drafting by AI: from an example version, from pasted material,
+                  or by elaborating items  ->  proposals (never sees a response)
     grade.py      one LLM call: (problem, criterion, response) -> Sample
     aggregate.py  k samples -> binary final, confidence, review flags
     runner.py     batch runs: concurrency cap, cache, progress, cancel

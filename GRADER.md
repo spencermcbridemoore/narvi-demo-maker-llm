@@ -7,8 +7,10 @@ majority vote is the grade, and how strongly the votes agree is the confidence.
 A teacher reviews the uncertain or flagged items, and everything exports as CSV.
 
 It works on **one problem bank at a time**: one problem, in one or more isomorphic
-versions, with a rubric per version. The plan for the round that follows the MVP
-is in [GRADER_PLAN.md](GRADER_PLAN.md); this file describes what is built.
+versions, with a rubric per version. A rubric can be written by hand or drafted by
+AI; an AI draft is a proposal, and nothing in it is used until you accept it. The
+plan for the round that follows the MVP is in [GRADER_PLAN.md](GRADER_PLAN.md);
+this file describes what is built.
 
 - UI: `/grader` (same SPA as DemoBuilder, lazy-loaded)
 - API: `/grader/api/*` (`backend/app/grader/api.py`)
@@ -36,15 +38,18 @@ Each step shows one default action. Everything else is in a collapsed side box.
 1. **Problem**: upload a problem or problem bank as a Problem Info CSV. Side box:
    the Chen & Wan example (one problem at a time, pick the rubric wording), problem
    info and responses together (the responses are held until the rubric is
-   approved), pasting the CSV text, and the saved problem banks (open, delete).
+   approved), pasting the CSV text, pasting unstructured material for the AI to
+   draft a bank from, and the saved problem banks (open, delete).
 2. **Rubric**: one panel per version, made of boxes: problem text, each item, each
-   weight. An upload is never rejected for what it lacks. Boxes that plain code
+   weight, and each item's optional acceptable forms and "does not count"
+   exclusions. An upload is never rejected for what it lacks. Boxes that plain code
    could fill (a missing problem id, item number or weight) are filled and marked
    "filled in for you"; empty boxes that are needed are highlighted. **Approve &
-   lock** stays off until nothing needed is empty. A locked rubric is read-only;
-   "Edit rubric" unlocks it as a draft of the next revision. Side box: copy a rubric
-   to versions without one, add or remove a version, download the rubric as a
-   Problem Info CSV, and the file details.
+   lock** stays off until nothing needed is empty and no AI draft is waiting. A
+   locked rubric is read-only; "Edit rubric" unlocks it as a draft of the next
+   revision. Side box: copy a rubric to versions without one, add or remove a
+   version, download the rubric as a Problem Info CSV, the AI drafting tools (see
+   below), and the file details.
 3. **Responses**: locked until the rubric is approved. Names you list are replaced
    with `[STUDENT]` **in the browser**, student ids are swapped for one-time ids
    (S001…), and only the id, version and response columns are uploaded. The id key
@@ -70,8 +75,44 @@ gave isn't in the response), `no_evidence` (credit without a quote),
 `addresses_grader` ("note to the grader…").
 
 The hard stops are enforced by the API, not only by the screen: no approval while
-a needed box is empty, no responses before approval, no grading without both, and
-no grading of a response whose version is unknown.
+a needed box is empty or an AI draft is undecided, no responses before approval,
+no grading without both, and no grading of a response whose version is unknown.
+
+### Rubric drafting by AI
+
+Three ways in, all on the Rubric step (the first also from the Problem step's side
+box). Each one produces a **draft**: it shows in the panel of its version, dashed
+and marked "AI draft", and is not part of the rubric until you accept it. The
+check, the rubric hash, runs and the CSV download never see a draft.
+
+- **From an example version.** When some versions have no rubric and one has, the
+  screen asks whether the AI should draft them from that one. Item numbers, weights
+  and the number of items are copied by code; the AI only adapts the wording.
+  "Generate based on v1" does the same for one version. For a version that already
+  has its own items, the AI only carries the example's acceptable forms and
+  exclusions over, and keeps your statements.
+- **From pasted material.** Paste a problem with its solution, grading notes or a
+  point scheme. The AI drafts the items and finds the problem text. Each item shows
+  the words of your material behind it. One version per paste.
+- **Elaborate my existing items.** For one version, the AI suggests acceptable forms
+  and things that do not count. It does not change your statements.
+
+What is **inferred** is decided by code, not by the AI: an item counts as backed
+only when the words it quotes are found in what you pasted. Everything "elaborate"
+suggests, and everything drafted from a problem text alone, is inferred. Inferred
+items are accepted or discarded one by one; the rest can be accepted together.
+Accepted AI text keeps an "AI draft" mark until you change it.
+
+"Let the AI fill gaps" (side box, off by default): off, the AI drafts only when you
+press a button. Switching it on drafts every version that has no rubric, from a
+version that has one, or else from the problem text alone.
+
+The drafting model is sent problem texts and rubric items only, never a student
+response. Pasted text is treated as data, not as instructions. It is kept on the
+server until the rubric is approved, then deleted. Do not paste student work.
+Drafting uses the `rubric` role in `backend/app/llm/models.yaml` (the strong tier)
+and has prompts of its own (`backend/app/grader/prompts/draft_*.txt`); the grading
+prompts and the sample cache are not affected.
 
 ### CSV formats
 
@@ -94,8 +135,12 @@ problem_id,problem_text,rubric_item_1,weight_1,rubric_item_2,weight_2
 ```
 
 `weight` may also be called `rubric_score`, `score` or `points`; `instructions` is
-optional. The MVP's rubric CSV (`problem_id, problem_text, item, criterion_text,
-points`) is still read. All versions in one file are versions of the same problem.
+optional. Two more optional columns carry an item's acceptable forms and its
+exclusions, one entry per line in the cell: `acceptable_forms` and
+`does_not_count` (`acceptable_forms_1` and so on in the wide shape). The download
+writes them only when an item has any. The MVP's rubric CSV (`problem_id,
+problem_text, item, criterion_text, points`) is still read. All versions in one
+file are versions of the same problem.
 
 Responses (text only):
 
@@ -162,6 +207,10 @@ real, identifiable student work:
 - Azure may keep flagged prompts for abuse review unless you're approved for
   modified abuse monitoring.
 - The instance has a 4 GB swapfile and Docker logs aren't rotated.
+- Rubric drafting sends problem texts, rubric items and whatever you paste as
+  material to the drafting model, and never a student response. The pasted material
+  is stored with its bank until the rubric is approved or the bank is deleted. It is
+  not checked for names, so do not paste student work.
 - Problem banks (problem text, rubric, responses), runs and cached model answers
   persist in `backend/app/data/grader/` until deleted. Nothing is purged
   automatically. What each delete call removes:
@@ -179,9 +228,10 @@ real, identifiable student work:
 
 ## Not built yet
 
-Rubric drafting by AI (from an example version, from pasted material, or by
-elaborating existing items), the settings panel, and feedback generation: see the
-phases in [GRADER_PLAN.md](GRADER_PLAN.md). Also not built: whole-exam grading on
+The settings panel (votes, test fraction, a model per task) and feedback
+generation: see the phases in [GRADER_PLAN.md](GRADER_PLAN.md). Also not built:
+drafting several versions from one paste, drafting from the terminal, whole-exam
+grading on
 top of problem banks, splitting criteria into AND/OR/NOT checks, automatic purge,
 per-teacher accounts, a separate Azure deployment, and file formats other than
 text CSV.

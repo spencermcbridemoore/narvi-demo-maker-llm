@@ -318,6 +318,9 @@ _TEXT = ["rubric_item", "rubric_items", "criterion_text", "item_text", "criterio
          "rubric_text", "description", "rubric", "text", "item", "items"]
 _WEIGHT = ["weight", "rubric_score", "score", "points", "max_points", "rubric_weight",
            "item_weight"]
+# Optional: an item's acceptable forms and its "does not count" exclusions, one per line.
+_ACCEPT = ["acceptable_forms", "acceptable_form", "acceptable", "accepted_forms", "accept"]
+_REJECT = ["does_not_count", "exclusions", "exclusion", "not_accepted", "reject"]
 _AMBIGUOUS_PID = {"problem", "question", "q"}   # may hold the problem text instead of an id
 
 # Wide shape: rubric_item_1, weight_1, rubric_item_2, weight_2, ...
@@ -326,13 +329,23 @@ _WIDE_TEXT = re.compile(
 _WIDE_WEIGHT = re.compile(
     r"^(?:weight|rubric_score|score|points?|max_points|rubric_weight|item_weight)_?(\d+)$"
     r"|^(?:rubric_items?|items?|criterion)_?(\d+)_(?:weight|rubric_score|score|points?)$")
+_WIDE_ACCEPT = re.compile(r"^(?:acceptable_forms?|acceptable|accepted_forms|accept)_?(\d+)$")
+_WIDE_REJECT = re.compile(r"^(?:does_not_count|exclusions?|not_accepted|reject)_?(\d+)$")
+_WIDE = (_WIDE_TEXT, _WIDE_WEIGHT, _WIDE_ACCEPT, _WIDE_REJECT)
 
 # Chen's whole-rubric cells mark each item with a "# Item n:" line.
 _ITEM_MARK = re.compile(r"^[ \t]*#+[ \t]*item[ \t]*(\d+)[ \t]*[:.)\-]?[ \t]*", re.I | re.M)
+_BULLET = re.compile(r"^[ \t]*[-*•]+[ \t]+")
 
 
 def _tidy(text: str) -> str:
     return "\n".join(line.rstrip() for line in text.strip().splitlines())
+
+
+def _lines(cell: str) -> list[str]:
+    """The entries of an acceptable-forms or does-not-count cell: one per line, without
+    a leading bullet mark."""
+    return [line for line in (_BULLET.sub("", raw).strip() for raw in cell.splitlines()) if line]
 
 
 def _split_items(cell: str) -> tuple[list[tuple[str, str]], str] | None:
@@ -375,6 +388,8 @@ class _ItemRow:
     row: int
     joined: bool        # the row had no problem id and was put with the version above
     shared_weight: int  # > 0: this many items share one weight cell
+    accept: list[str] = field(default_factory=list)
+    reject: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -436,14 +451,22 @@ class _Bank:
                       value=version.instructions, row=row)
 
     def rubric_cell(self, version: Problem, key: str, text: str, raw_weight: str, row: int,
-                    joined: bool = False) -> None:
+                    joined: bool = False, accept: list[str] | None = None,
+                    reject: list[str] | None = None) -> None:
         """One row's rubric cell: a single item, or several behind "# Item n:" marks.
         Items wait in ``pending`` until every row is read (see ``number_items``)."""
         split = _split_items(text)
         if split is None:
-            self.pending.append(_ItemRow(version, key, text, raw_weight, row, joined, 0))
+            self.pending.append(_ItemRow(version, key, text, raw_weight, row, joined, 0,
+                                         accept or [], reject or []))
             return
         parts, lead = split
+        if accept or reject:
+            self.note("lists_not_used",
+                      f"Version {version.id}: one rubric cell holds several items, so the "
+                      "acceptable forms and exclusions next to it could not be matched to an "
+                      "item and were not used.",
+                      problem_id=version.id, row=row)
         if lead:
             self.note("rubric_cell_lead",
                       f"Version {version.id}: the text before the first \"# Item\" mark in the "
@@ -520,7 +543,7 @@ class _Bank:
                       "owner", "item_text", **where)
         items.append(Criterion(
             id=f"{version.id}#{key}", problem_id=version.id, key=key, label=f"Item {key}",
-            text=it.text, source_text=it.text, points=points,
+            text=it.text, source_text=it.text, points=points, accept=it.accept, reject=it.reject,
         ))
 
 
@@ -534,6 +557,10 @@ def load_problem_info(csv_text: str, name: str = "") -> tuple[Assessment, list[F
     Wide shape (one row per version)::
 
         problem_id,problem_text,rubric_item_1,weight_1,rubric_item_2,weight_2
+
+    Either shape may carry an item's acceptable forms and its "does not count"
+    exclusions, one per line in a cell: ``acceptable_forms`` and ``does_not_count``
+    (``acceptable_forms_1`` ... in the wide shape).
 
     Raises ``NothingToLoad`` only when there is nothing in the file to load.
     """
@@ -549,40 +576,44 @@ def load_problem_info(csv_text: str, name: str = "") -> tuple[Assessment, list[F
     ptext_col = cols.take(_PTEXT)
     instr_col = cols.take(_INSTRUCTIONS)
     weight_col = cols.take(_WEIGHT)
+    accept_col = cols.take(_ACCEPT)
+    reject_col = cols.take(_REJECT)
     key_col = cols.take(_KEY)
     text_col = cols.take(_TEXT)
 
-    wide: dict[int, list[int | None]] = {}      # item number -> [text column, weight column]
+    # item number -> its [text, weight, acceptable forms, does not count] columns
+    wide: dict[int, list[int | None]] = {}
     for i, norm in enumerate(cols.norm):
         if i in cols.used:
             continue
-        m_text, m_weight = _WIDE_TEXT.match(norm), _WIDE_WEIGHT.match(norm)
-        if not (m_text or m_weight):
+        matches = [pattern.match(norm) for pattern in _WIDE]
+        slot = next((s for s, m in enumerate(matches) if m), None)
+        if slot is None:
             continue
-        number = int(m_text.group(1) if m_text else m_weight.group(1) or m_weight.group(2))
-        pair = wide.setdefault(number, [None, None])
-        slot = 0 if m_text else 1
-        if pair[slot] is None:      # a second column for the same item stays "not used"
-            pair[slot] = i
+        number = int(next(g for g in matches[slot].groups() if g))
+        found = wide.setdefault(number, [None, None, None, None])
+        if found[slot] is None:     # a second column for the same item stays "not used"
+            found[slot] = i
             cols.used.add(i)
-    is_wide = any(t is not None for t, _ in wide.values())
+    is_wide = any(found[0] is not None for found in wide.values())
     if wide and not is_wide:                    # numbered weights without numbered items
-        cols.used -= {w for _, w in wide.values() if w is not None}
+        cols.used -= {c for found in wide.values() for c in found if c is not None}
         wide = {}
     if is_wide:
         if text_col is not None:
             if 1 in wide:
                 # "rubric_item, rubric_item.1, ..." (as pandas and R write repeated
                 # names): the unnumbered column comes first, the others move up.
-                wide = {n + 1: pair for n, pair in wide.items()}
+                wide = {n + 1: found for n, found in wide.items()}
                 bank.note("columns_renumbered",
                           f"The file has the column {cols.names([text_col])} next to numbered "
                           "item columns, so we read it as item 1 and moved the others up by one.")
-            wide[1] = [text_col, weight_col]
-            text_col = weight_col = None
+            wide[1] = [text_col, weight_col, accept_col, reject_col]
+            text_col = weight_col = accept_col = reject_col = None
         # One row per version: other unnumbered item columns have no meaning here.
-        cols.used -= {c for c in (key_col, text_col, weight_col) if c is not None}
-        key_col = text_col = weight_col = None
+        cols.used -= {c for c in (key_col, text_col, weight_col, accept_col, reject_col)
+                      if c is not None}
+        key_col = text_col = weight_col = accept_col = reject_col = None
 
     if not cols.used:
         # No column name recognized: assume the documented order, and say so.
@@ -616,19 +647,22 @@ def load_problem_info(csv_text: str, name: str = "") -> tuple[Assessment, list[F
         pid, ptext, instr = cell(pid_col), cell(ptext_col), cell(instr_col)
         if is_wide:
             numbered_items = [
-                (n, cell(t), cell(w)) for n, (t, w) in sorted(wide.items())
-                if cell(t) or cell(w)
+                (n, cell(t), cell(w), _lines(cell(a)), _lines(cell(r)))
+                for n, (t, w, a, r) in sorted(wide.items())
+                if cell(t) or cell(w) or cell(a) or cell(r)
             ]
             if not (pid or ptext or instr or numbered_items):
                 continue
             version = bank.version(pid, row_no)     # one row per version: a repeat is a duplicate
             bank.describe(version, ptext, instr, row_no)
-            for n, text, raw_weight in numbered_items:
-                bank.rubric_cell(version, str(n), text, raw_weight, row_no)
+            for n, text, raw_weight, accept, reject in numbered_items:
+                bank.rubric_cell(version, str(n), text, raw_weight, row_no,
+                                 accept=accept, reject=reject)
             continue
 
         key, text, raw_weight = cell(key_col), cell(text_col), cell(weight_col)
-        if not (pid or ptext or instr or key or text or raw_weight):
+        accept, reject = _lines(cell(accept_col)), _lines(cell(reject_col))
+        if not (pid or ptext or instr or key or text or raw_weight or accept or reject):
             continue
         joined = False
         if pid:
@@ -642,8 +676,8 @@ def load_problem_info(csv_text: str, name: str = "") -> tuple[Assessment, list[F
             version = bank.version("", row_no)
         current = version
         bank.describe(version, ptext, instr, row_no)
-        if key or text or raw_weight:
-            bank.rubric_cell(version, key, text, raw_weight, row_no, joined)
+        if key or text or raw_weight or accept or reject:
+            bank.rubric_cell(version, key, text, raw_weight, row_no, joined, accept, reject)
 
     if not bank.versions:
         raise NothingToLoad(
@@ -675,8 +709,12 @@ def load_problem_info(csv_text: str, name: str = "") -> tuple[Assessment, list[F
 
 def problem_info_csv(bank: Assessment) -> str:
     """The bank's current rubric as a Problem Info CSV in the long shape. The
-    ``instructions`` and ``item`` columns appear only when they carry something."""
+    ``instructions``, ``item``, ``acceptable_forms`` and ``does_not_count`` columns
+    appear only when they carry something. AI drafts that are still waiting are not
+    part of the rubric, so they are not in the file."""
     with_instructions = any(p.instructions.strip() for p in bank.problems)
+    with_accept = any(c.accept for c in bank.criteria)
+    with_reject = any(c.reject for c in bank.criteria)
     plain_keys = all(
         [c.key for c in bank.criteria_for(p.id)] == [str(i + 1) for i in range(len(bank.criteria_for(p.id)))]
         for p in bank.problems
@@ -685,6 +723,8 @@ def problem_info_csv(bank: Assessment) -> str:
     header += ["instructions"] if with_instructions else []
     header += [] if plain_keys else ["item"]
     header += ["rubric_item", "weight"]
+    header += ["acceptable_forms"] if with_accept else []
+    header += ["does_not_count"] if with_reject else []
 
     buf = io.StringIO()
     out = csv.writer(buf, lineterminator="\n")
@@ -698,6 +738,10 @@ def problem_info_csv(bank: Assessment) -> str:
                 row.append(c.key if c else "")
             # A weight that is not set yet stays empty; any other number is written in full.
             row += [c.text, "" if c.points == 0 else f"{c.points:.15g}"] if c else ["", ""]
+            if with_accept:
+                row.append("\n".join(c.accept) if c else "")
+            if with_reject:
+                row.append("\n".join(c.reject) if c else "")
             out.writerow(row)
     return buf.getvalue()
 

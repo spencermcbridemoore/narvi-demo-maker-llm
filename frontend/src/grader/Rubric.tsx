@@ -2,9 +2,21 @@
 // each weight. Boxes that code filled from the file carry a "filled in for you" mark
 // and stay editable; empty boxes that are needed are highlighted. The server's live
 // check says what is still missing; Approve & lock stays off until nothing is.
+// An AI draft shows in the panel of its version, marked as not part of the rubric
+// yet, until it is accepted or discarded item by item (Drafts.tsx).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { api, ApiError, type Bank, type Box, type Finding } from "./api";
+import { api, ApiError, type Bank, type Box, type DraftRequest, type Finding, type Proposal } from "./api";
+import {
+  DraftingStatus,
+  Lines,
+  LinesEditor,
+  OriginMark,
+  ProposalHead,
+  ProposedItemCard,
+  ProposedText,
+  acceptTogether,
+} from "./Drafts";
 import { ConfirmButton, FilledMark, FindingList, SideBox, StepLayout, fmtDate, isLegacy } from "./parts";
 import { errMsg } from "./util";
 
@@ -79,10 +91,11 @@ type Props = {
   runCount: number; // runs this bank already has
   onBank: (b: Bank) => void;
   onError: (m: string) => void;
+  onNotice: (m: string | null) => void;
   onNext: () => void;
 };
 
-export function RubricStep({ bank, runCount, onBank, onError, onNext }: Props) {
+export function RubricStep({ bank, runCount, onBank, onError, onNotice, onNext }: Props) {
   const legacy = isLegacy(bank);
   const editable = bank.check.editable;
   const [drafts, setDrafts] = useState<VersionDraft[]>(() => toDrafts(bank));
@@ -91,6 +104,11 @@ export function RubricStep({ bank, runCount, onBank, onError, onNext }: Props) {
   const [idError, setIdError] = useState<Record<string, string>>({});
   const [copyFrom, setCopyFrom] = useState("");
   const [removeId, setRemoveId] = useState("");
+  // Drafting with AI (side box): the versions chosen there, and the pasted material.
+  const [exampleId, setExampleId] = useState("");
+  const [elaborateId, setElaborateId] = useState("");
+  const [materialId, setMaterialId] = useState("");
+  const [material, setMaterial] = useState("");
 
   // The latest boxes and bank, readable from saves that run after this render.
   const draftsRef = useRef(drafts);
@@ -139,8 +157,9 @@ export function RubricStep({ bank, runCount, onBank, onError, onNext }: Props) {
                 key: i.key,
                 text: i.text,
                 points: parseWeight(i.weight),
-                accept: i.accept,
-                reject: i.reject,
+                // A line that was added and left empty is not part of the item.
+                accept: i.accept.filter((line) => line.trim() !== ""),
+                reject: i.reject.filter((line) => line.trim() !== ""),
               })),
             );
           if (latest) onBank(latest);
@@ -223,8 +242,11 @@ export function RubricStep({ bank, runCount, onBank, onError, onNext }: Props) {
   /** The id the server knows a version by right now (a rename may have just gone through). */
   const idOf = (vuid: string) => draftsRef.current.find((d) => d.uid === vuid)?.id ?? "";
 
-  /** A change that reshapes the bank: save what is pending, apply it, take the result. */
-  const reshape = async (change: () => Promise<Bank>) => {
+  /**
+   * A change that reshapes the bank: save what is pending, apply it, take the result.
+   * A refusal that names a box takes the owner to it; `say` also shows its sentence.
+   */
+  const reshape = async (change: () => Promise<Bank>, say = false) => {
     setBusy(true);
     try {
       await flush();
@@ -235,18 +257,87 @@ export function RubricStep({ bank, runCount, onBank, onError, onNext }: Props) {
       onBank(latest);
       resync(latest);
     } catch (e) {
-      if (e instanceof ApiError && e.reasons.length) goToBox(e.reasons[0] as Box);
-      else report(e);
+      const boxes = e instanceof ApiError ? e.reasons : [];
+      if (boxes.length) goToBox(boxes[0] as Box);
+      if (say || !boxes.length) report(e);
     } finally {
       setBusy(false);
     }
   };
 
+  // --- AI drafts ---------------------------------------------------------------
+  const drafting = bank.drafting?.running ?? false;
+  // While the AI is drafting, ask how far it is. The question goes through the same
+  // queue as the saves, so an older answer never replaces a newer one.
+  useEffect(() => {
+    if (!drafting) return;
+    const poll = window.setInterval(() => {
+      enqueue(async () => onBank(await api.getBank(bankId))).catch(() => undefined);
+    }, 1500);
+    return () => window.clearInterval(poll);
+  }, [drafting, bankId, enqueue, onBank]);
+
+  /** Ask the AI for a draft. True when it has started. */
+  const draftNow = async (body: DraftRequest): Promise<boolean> => {
+    let started = false;
+    await reshape(async () => {
+      const latest = await api.startDraft(bankId, body);
+      started = true;
+      return latest;
+    }, true);
+    return started;
+  };
+  const accept = (p: Proposal, keys: string[], text = false) =>
+    reshape(async () => {
+      const latest = await api.acceptProposal(bankId, p.id, keys, text);
+      const left = latest.left.length + (latest.text_left ? 1 : 0);
+      onNotice(
+        left
+          ? `${plural(left, "inferred part was", "inferred parts were")} left waiting. Nothing of yours backs ${left === 1 ? "it" : "them"}, so ${left === 1 ? "it is" : "each one is"} accepted or discarded on its own.`
+          : null,
+      );
+      return latest;
+    }, true);
+  const discard = (p: Proposal, keys?: string[], text = false) =>
+    reshape(() => api.discardProposal(bankId, p.id, keys, text), true);
+  const again = (p: Proposal) =>
+    draftNow({
+      mode: p.mode,
+      problem_ids: [p.problem_id],
+      ...(p.mode === "example" ? { example_id: p.example_id } : {}),
+    });
+
   // --- what the screen shows -------------------------------------------------
   const toFill = bank.check.to_fill;
-  const canApprove = editable && toFill.length === 0;
+  const toDecide = bank.check.to_decide;
+  const canApprove = editable && toFill.length === 0 && toDecide.length === 0 && !drafting;
+  const more = (n: number, one: string, many: string) => (n > 1 ? ` And ${plural(n - 1, one, many)}.` : "");
+  const notYet = drafting
+    ? "the AI is still drafting."
+    : toFill.length
+      ? toFill[0].message + more(toFill.length, "more box", "more boxes")
+      : toDecide.length
+        ? toDecide[0].message + more(toDecide.length, "more AI draft", "more AI drafts")
+        : "";
   const withRubric = drafts.filter((d) => d.items.length > 0);
   const withoutRubric = drafts.filter((d) => d.items.length === 0);
+
+  // What the AI drafted (by version), what it could draft now, and what is saved for each item.
+  const ai = bank.ai;
+  const proposals = new Map(bank.proposals.map((p) => [p.problem_id, p]));
+  const saved = new Map(bank.criteria.map((c) => [`${c.problem_id}|${c.key}`, c]));
+  const undrafted = (ids: string[]) => ids.filter((id) => !proposals.has(id));
+  // The version the others are drafted from: the first with items, unless another is chosen.
+  const example = withRubric.some((v) => v.id === exampleId) ? exampleId : ai.example;
+  const missing = example ? undrafted(ai.from_example) : [];
+  const carry =
+    example === ai.example
+      ? undrafted(ai.carry_over)
+      : undrafted(withRubric.filter((v) => v.id !== example).map((v) => v.id));
+  const byHand = bank.check.without_rubric.filter((id) => !missing.includes(id) && !proposals.has(id));
+  const elaborateTarget = ai.elaborate.includes(elaborateId) ? elaborateId : (ai.elaborate[0] ?? "");
+  const materialTarget = ai.from_material.includes(materialId) ? materialId : (ai.from_material[0] ?? "");
+  const listed = (ids: string[]) => `${ids.length === 1 ? "Version" : "Versions"} ${ids.join(", ")}`;
   const rubricFindings = useMemo(() => bank.findings.filter((f) => f.scope === "rubric"), [bank.findings]);
 
   // "Filled in for you" marks: only before the first approval, and only while the box
@@ -263,19 +354,18 @@ export function RubricStep({ bank, runCount, onBank, onError, onNext }: Props) {
     const f = marks.get(`${box}|${v.id}|${key}`);
     return f && (f.value === "" || current === undefined || sameValue(f.value, current)) ? f : undefined;
   };
+  // A problem text taken from pasted material carries its own mark, not "filled in for you".
   const shownMarks = drafts.flatMap((v) => [
     mark("version_id", v, "", v.idBox),
     mark("version_text", v, "", v.text),
     mark("version_instructions", v, "", v.instructions),
     ...v.items.flatMap((i) => [mark("item_key", v, i.key, i.key), mark("item", v, i.key), mark("weight", v, i.key, i.weight)]),
-  ]).filter((f): f is Finding => !!f);
+  ]).filter((f): f is Finding => !!f && !f.code.startsWith("ai_"));
   const fileNotes = showMarks ? rubricFindings.filter((f) => f.filled === "code" && f.box === "file") : [];
 
   const copySource = withRubric.find((v) => v.uid === copyFrom) ?? withRubric[0];
   const removeTarget = drafts.find((v) => v.uid === removeId) ?? drafts[drafts.length - 1];
   const responsesOf = (id: string) => bank.responses.filter((r) => r.problem_id === id).length;
-  // Where each saved item came from; an item copied from another version says so until it is reworded.
-  const copied = new Set(bank.criteria.filter((c) => c.origin === "copied").map((c) => `${c.problem_id}|${c.key}`));
 
   const side = (
     <SideBox title="More options">
@@ -356,12 +446,139 @@ export function RubricStep({ bank, runCount, onBank, onError, onNext }: Props) {
           Download as Problem Info CSV
         </button>
       </div>
+      {toDecide.length > 0 && (
+        <p className="g-hint">AI drafts you have not accepted are not part of the rubric, so they are not in the file.</p>
+      )}
 
-      <h4>Let the AI fill gaps</h4>
-      <label className="g-check g-disabled">
-        <input type="checkbox" disabled checked={false} readOnly /> Let the AI draft the empty boxes
-      </label>
-      <p className="g-hint">Not built yet.</p>
+      {editable && (
+        <>
+          <h4>Let the AI fill gaps</h4>
+          <label className="g-check">
+            <input
+              type="checkbox"
+              checked={bank.ai_fill}
+              disabled={busy}
+              onChange={(e) => {
+                const on = e.target.checked;
+                void reshape(() => api.setAiFill(bankId, on), true);
+              }}
+            />
+            Let the AI draft the empty boxes
+          </label>
+          <p className="g-hint">
+            Off, the AI drafts only when you ask it to. On, it drafts every version that has no rubric as soon as you
+            switch this on: from a version that has one, or else from the problem text alone. Either way, nothing it
+            writes is used until you accept it.
+          </p>
+
+          <h4>Draft with AI</h4>
+          {withRubric.length > 1 && (
+            <label className="g-field">
+              Version to draft from
+              <select value={example} onChange={(e) => setExampleId(e.target.value)}>
+                {withRubric.map((v) => (
+                  <option key={v.uid} value={v.id}>
+                    {v.id}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {example && (missing.length > 0 || carry.length > 0) && (
+            <div className="g-row">
+              {missing.length > 0 && (
+                <button
+                  className="g-ghost small"
+                  disabled={busy || drafting}
+                  onClick={() => draftNow({ mode: "example", example_id: example, problem_ids: missing })}
+                >
+                  Draft {missing.join(", ")} from {example}
+                </button>
+              )}
+              {carry.length > 0 && (
+                <button
+                  className="g-ghost small"
+                  disabled={busy || drafting}
+                  onClick={() => draftNow({ mode: "example", example_id: example, problem_ids: carry })}
+                >
+                  Carry {example}'s acceptable forms and exclusions over to {carry.join(", ")}
+                </button>
+              )}
+            </div>
+          )}
+
+          <p className="g-hint">
+            <strong>Elaborate my existing items.</strong> For one version, the AI suggests acceptable forms and things
+            that do not count. It does not change your statements. Once you accept what you want, it can be carried
+            over to the other versions.
+          </p>
+          {elaborateTarget ? (
+            <div className="g-row">
+              {ai.elaborate.length > 1 && (
+                <select value={elaborateTarget} onChange={(e) => setElaborateId(e.target.value)} aria-label="Version to elaborate">
+                  {ai.elaborate.map((id) => (
+                    <option key={id} value={id}>
+                      {id}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <button
+                className="g-ghost small"
+                disabled={busy || drafting}
+                onClick={() => draftNow({ mode: "elaborate", problem_ids: [elaborateTarget] })}
+              >
+                Suggest them for {elaborateTarget}
+              </button>
+            </div>
+          ) : (
+            <p className="g-hint">It needs a version with a problem text and at least one item.</p>
+          )}
+
+          {materialTarget && (
+            <>
+              <p className="g-hint">
+                <strong>Draft from pasted material.</strong> For a version without a rubric: paste its solution, your
+                grading notes or a point scheme. Do not paste student work: the text goes to the AI as it is.
+              </p>
+              {ai.from_material.length > 1 && (
+                <select value={materialTarget} onChange={(e) => setMaterialId(e.target.value)} aria-label="Version to draft for">
+                  {ai.from_material.map((id) => (
+                    <option key={id} value={id}>
+                      {id}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <textarea
+                className="g-paste"
+                rows={4}
+                value={material}
+                onChange={(e) => setMaterial(e.target.value)}
+                placeholder="Solution, grading notes, point scheme…"
+                aria-label="Material to draft from"
+              />
+              <div className="g-row">
+                <button
+                  className="g-ghost small"
+                  disabled={busy || drafting || (!material.trim() && !bank.has_material)}
+                  onClick={() =>
+                    draftNow({
+                      mode: "material",
+                      problem_ids: [materialTarget],
+                      ...(material.trim() ? { material } : {}),
+                    }).then((started) => started && setMaterial(""))
+                  }
+                >
+                  {material.trim() || !bank.has_material
+                    ? `Draft ${materialTarget} from this material`
+                    : `Draft ${materialTarget} again from what you pasted before`}
+                </button>
+              </div>
+            </>
+          )}
+        </>
+      )}
 
       <h4>Details</h4>
       <p className="g-hint">What was noticed in the uploaded file, with file rows, for anyone fixing the file itself.</p>
@@ -419,18 +636,64 @@ export function RubricStep({ bank, runCount, onBank, onError, onNext }: Props) {
               {runCount > 0 && ` The ${plural(runCount, "run")} you already have ${runCount === 1 ? "keeps" : "keep"} the rubric used at the time.`}
               {bank.responses.length > 0 && ` The ${plural(bank.responses.length, "response")} stay attached while you edit.`}
             </p>
-            {bank.check.rubric_state === "none" && (
+            <DraftingStatus
+              drafting={bank.drafting}
+              onCancel={() => api.cancelDraft(bankId).then(onBank).catch(report)}
+            />
+            {bank.check.rubric_state === "none" && byHand.length > 0 && !drafting && (
               <p className="g-callout">
                 A rubric is required for at least one version. Write the items for one version below
-                {drafts.length > 1 ? "; you can then copy them to the other versions." : "."}
+                {drafts.length > 1 ? "; you can then copy them to the other versions." : "."} Or paste a solution or
+                your grading notes under "More options" and let the AI draft them for you to review.
               </p>
             )}
-            {bank.check.rubric_state === "some" && (
+            {!drafting && missing.length > 0 && (
+              <div className="g-callout">
+                <p>
+                  {listed(missing)} {missing.length === 1 ? "has" : "have"} no rubric yet. Do you want the AI to draft{" "}
+                  {missing.length === 1 ? "it" : "them"} from version {example}? You review everything it writes before
+                  it is used.
+                </p>
+                <div className="g-row">
+                  <button
+                    className="g-primary small"
+                    disabled={busy}
+                    onClick={() => draftNow({ mode: "example", example_id: example, problem_ids: missing })}
+                  >
+                    Yes, draft {missing.length === 1 ? "it" : "them"}
+                  </button>
+                  <button className="g-ghost small" onClick={() => goToBox({ box: "items", problem_id: missing[0] })}>
+                    No, I will write {missing.length === 1 ? "it" : "them"}
+                  </button>
+                </div>
+              </div>
+            )}
+            {bank.check.rubric_state === "some" && byHand.length > 0 && (
               <p className="g-callout">
-                {bank.check.without_rubric.length === 1 ? "Version" : "Versions"} {bank.check.without_rubric.join(", ")}{" "}
-                {bank.check.without_rubric.length === 1 ? "has" : "have"} no rubric yet. Write the items by hand, or copy
+                {listed(byHand)} {byHand.length === 1 ? "has" : "have"} no rubric yet. Write the items by hand, or copy
                 them from a version that has one.
+                {byHand.some((id) => ai.needs_text.includes(id)) &&
+                  " The AI can draft them too, once the problem text is filled in."}
               </p>
+            )}
+            {!drafting && carry.length > 0 && example === ai.example && (
+              <div className="g-callout">
+                <p>
+                  Version {example} has acceptable forms or exclusions that{" "}
+                  {carry.length === 1 ? "version" : "versions"} {carry.join(", ")}{" "}
+                  {carry.length === 1 ? "lacks" : "lack"}. Do you want the AI to carry them over? It keeps the
+                  statements as they are, and you review what it adds.
+                </p>
+                <div className="g-row">
+                  <button
+                    className="g-ghost small"
+                    disabled={busy}
+                    onClick={() => draftNow({ mode: "example", example_id: example, problem_ids: carry })}
+                  >
+                    Yes, draft them
+                  </button>
+                </div>
+              </div>
             )}
             {fileNotes.map((f, i) => (
               <p className="g-callout" key={i}>
@@ -438,13 +701,17 @@ export function RubricStep({ bank, runCount, onBank, onError, onNext }: Props) {
               </p>
             ))}
 
-            {toFill.length > 0 ? (
+            {toFill.length > 0 && (
               <button className="g-count" onClick={() => goToBox(toFill[0])}>
                 {plural(toFill.length, "box", "boxes")} still to fill →
               </button>
-            ) : (
-              <p className="g-ok">Nothing is missing. You can approve the rubric.</p>
             )}
+            {toDecide.length > 0 && (
+              <button className="g-count decide" onClick={() => goToBox(toDecide[0])}>
+                {plural(toDecide.length, "AI draft")} to accept or discard →
+              </button>
+            )}
+            {canApprove && <p className="g-ok">Nothing is missing. You can approve the rubric.</p>}
 
             {shownMarks.length > 0 && (
               <div className="g-filled">
@@ -488,7 +755,7 @@ export function RubricStep({ bank, runCount, onBank, onError, onNext }: Props) {
               <span className="g-muted">
                 {canApprove
                   ? "Locks the rubric so grading always uses exactly this wording. You can still edit it later."
-                  : `Not yet: ${toFill[0].message}${toFill.length > 1 ? ` And ${plural(toFill.length - 1, "more box", "more boxes")}.` : ""}`}
+                  : `Not yet: ${notYet}`}
               </span>
             </div>
           </>
@@ -518,9 +785,11 @@ export function RubricStep({ bank, runCount, onBank, onError, onNext }: Props) {
                   <div className="g-item-head">
                     <strong>{c.label}</strong>
                     <span className="g-muted">weight {c.points}</span>
-                    {c.origin === "copied" && <span className="g-tag">copied from another version</span>}
+                    <OriginMark origin={c.origin} />
                   </div>
                   <pre className="g-pre">{c.text}</pre>
+                  <Lines label="Acceptable forms" lines={c.accept} aiLines={c.ai_lines} />
+                  <Lines label="Does not count" lines={c.reject} aiLines={c.ai_lines} />
                   {c.source_text && c.source_text !== c.text && (
                     <details className="g-orig">
                       <summary>Original wording</summary>
@@ -536,6 +805,10 @@ export function RubricStep({ bank, runCount, onBank, onError, onNext }: Props) {
         <fieldset className="g-boxes" disabled={busy}>
           {drafts.map((v) => {
           const others = withRubric.filter((o) => o.uid !== v.uid);
+          const proposal = proposals.get(v.id);
+          const draftedItems = proposal?.items.filter((i) => i.text !== "") ?? [];
+          const canGenerate = !proposal && !!example && example !== v.id && ai.from_example.includes(v.id);
+          const canGuess = !proposal && bank.ai_fill && ai.from_text.includes(v.id);
           return (
             <section className="g-card" key={v.uid}>
               <div className="g-row g-version-head">
@@ -570,6 +843,15 @@ export function RubricStep({ bank, runCount, onBank, onError, onNext }: Props) {
                 />
                 {!v.text.trim() && <span className="g-need">Needed: the problem text of this version.</span>}
               </label>
+              {proposal?.version_text && (
+                <ProposedText
+                  proposal={proposal}
+                  id={boxId("proposal_text", v.id)}
+                  busy={busy}
+                  onAccept={() => accept(proposal, [], true)}
+                  onDiscard={() => discard(proposal, [], true)}
+                />
+              )}
               <details className="g-inner" open={!!v.instructions}>
                 <summary>
                   What students were asked to write (optional){" "}
@@ -585,8 +867,33 @@ export function RubricStep({ bank, runCount, onBank, onError, onNext }: Props) {
               </details>
 
               <h4>Rubric items</h4>
-              {v.items.length === 0 && (
-                <div id={boxId("items", v.id)} className="g-empty needed" tabIndex={-1}>
+              {proposal && (
+                <ProposalHead
+                  proposal={proposal}
+                  id={v.items.length === 0 ? boxId("items", v.id) : undefined}
+                  busy={busy || drafting}
+                  onAcceptAll={() => {
+                    const together = acceptTogether(proposal);
+                    return accept(proposal, together.keys, together.text);
+                  }}
+                  onDiscardAll={() => discard(proposal)}
+                  onAgain={() => again(proposal)}
+                />
+              )}
+              {proposal &&
+                draftedItems.map((drafted) => (
+                  <ProposedItemCard
+                    key={drafted.key}
+                    proposal={proposal}
+                    item={drafted}
+                    id={boxId("proposal", v.id, drafted.key)}
+                    busy={busy}
+                    onAccept={() => accept(proposal, [drafted.key])}
+                    onDiscard={() => discard(proposal, [drafted.key])}
+                  />
+                ))}
+              {v.items.length === 0 && draftedItems.length === 0 && (
+                <div id={proposal ? undefined : boxId("items", v.id)} className="g-empty needed" tabIndex={-1}>
                   <p>Needed: at least one rubric item for this version.</p>
                   <div className="g-row">
                     <button className="g-primary small" onClick={() => addItem(v)}>
@@ -602,21 +909,39 @@ export function RubricStep({ bank, runCount, onBank, onError, onNext }: Props) {
                         Copy the {plural(o.items.length, "item")} from {o.id}
                       </button>
                     ))}
+                    {canGenerate && (
+                      <button
+                        className="g-ghost small"
+                        disabled={busy || drafting}
+                        title="The AI adapts that version's items to this one. You review what it writes."
+                        onClick={() => draftNow({ mode: "example", example_id: example, problem_ids: [idOf(v.uid)] })}
+                      >
+                        Generate based on {example}
+                      </button>
+                    )}
+                    {canGuess && (
+                      <button
+                        className="g-ghost small"
+                        disabled={busy || drafting}
+                        title="The AI's own guess from the problem text. Every item it writes is marked as inferred."
+                        onClick={() => draftNow({ mode: "text", problem_ids: [idOf(v.uid)] })}
+                      >
+                        Let the AI draft from the problem text
+                      </button>
+                    )}
                   </div>
                 </div>
               )}
               {v.items.map((item) => {
                 const weightOk = validWeight(item.weight);
+                const savedItem = saved.get(`${v.id}|${item.key}`);
+                const suggested = proposal?.items.find((i) => i.text === "" && i.key === item.key);
                 return (
                   <div className="g-item" key={item.uid}>
                     <div className="g-item-head">
                       <strong>Item {item.key}</strong>
                       <FilledMark finding={mark("item_key", v, item.key, item.key) ?? mark("item", v, item.key)} />
-                      {copied.has(`${v.id}|${item.key}`) && (
-                        <span className="g-tag" title="Copied unchanged from another version. Check that it fits this one.">
-                          copied
-                        </span>
-                      )}
+                      <OriginMark origin={savedItem?.origin} />
                       <button
                         className="g-ghost small g-remove"
                         onClick={() => editItems(v.uid, (items) => items.filter((i) => i.uid !== item.uid))}
@@ -662,10 +987,43 @@ export function RubricStep({ bank, runCount, onBank, onError, onNext }: Props) {
                         {!weightOk && <span className="g-need">Needed: a number above zero.</span>}
                       </label>
                     </div>
+                    <details className="g-inner" open={item.accept.length + item.reject.length > 0}>
+                      <summary>Acceptable forms and exclusions (optional)</summary>
+                      <LinesEditor
+                        label="Acceptable forms"
+                        placeholder="Another way a response can satisfy this item"
+                        lines={item.accept}
+                        aiLines={savedItem?.ai_lines ?? []}
+                        onChange={(lines) =>
+                          editItems(v.uid, (items) => items.map((i) => (i.uid === item.uid ? { ...i, accept: lines } : i)))
+                        }
+                        onBlur={() => void flush()}
+                      />
+                      <LinesEditor
+                        label="Does not count"
+                        placeholder="Something close that must not earn this item"
+                        lines={item.reject}
+                        aiLines={savedItem?.ai_lines ?? []}
+                        onChange={(lines) =>
+                          editItems(v.uid, (items) => items.map((i) => (i.uid === item.uid ? { ...i, reject: lines } : i)))
+                        }
+                        onBlur={() => void flush()}
+                      />
+                    </details>
+                    {proposal && suggested && (
+                      <ProposedItemCard
+                        proposal={proposal}
+                        item={suggested}
+                        id={boxId("proposal", v.id, suggested.key)}
+                        busy={busy}
+                        onAccept={() => accept(proposal, [suggested.key])}
+                        onDiscard={() => discard(proposal, [suggested.key])}
+                      />
+                    )}
                   </div>
                 );
               })}
-              {v.items.length > 0 && (
+              {(v.items.length > 0 || draftedItems.length > 0) && (
                 <div className="g-row">
                   <button className="g-ghost small" onClick={() => addItem(v)}>
                     + Add an item
