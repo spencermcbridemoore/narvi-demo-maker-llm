@@ -213,6 +213,35 @@ summary { cursor: pointer; color: var(--muted); }
 }
 .g-status.ok { color: #86efac; border-color: #166534; background: #16653433; }
 
+/* --- AI drafts -------------------------------------------------------------- */
+/* Violet, and dashed while it is only a proposal: not an empty box (amber), not something
+   code filled in (blue), and not part of the rubric yet. */
+.g-ai {
+  display: inline-block; font-size: 0.68rem; font-weight: 600; color: #c4b5fd; background: #8b5cf61f;
+  border: 1px solid #8b5cf666; border-radius: 999px; padding: 1px 8px; white-space: nowrap; vertical-align: middle;
+}
+.g-ai[title] { cursor: help; }
+.g-ai.inferred { border-style: dashed; color: #ddd6fe; }
+.g-proposal, .g-proposed {
+  border: 1px dashed #8b5cf6; background: #8b5cf60f; border-radius: 10px; padding: 10px 14px; margin: 10px 0;
+  font-size: 0.86rem; line-height: 1.45;
+}
+.g-proposal p, .g-proposed p { margin: 4px 0; }
+.g-proposed .g-pre { margin: 8px 0 6px; }
+.g-item > .g-proposed { margin-bottom: 0; }
+.g-drafting {
+  border: 1px solid #8b5cf666; border-left: 3px solid #8b5cf6; background: #8b5cf614; border-radius: 8px;
+  padding: 8px 12px; margin: 10px 0; font-size: 0.86rem; line-height: 1.45;
+}
+.g-drafting .g-row { margin-top: 0; }
+.g-drafting .g-warn { margin-top: 6px; }
+.g-count.decide { background: #8b5cf622; color: #ddd6fe; border-color: #8b5cf6; }
+.g-count.decide:hover { background: #8b5cf633; }
+.g-callout p { margin: 0; }
+.g-lines { display: flex; flex-direction: column; gap: 5px; margin: 8px 0; align-items: flex-start; }
+.g-line { display: flex; align-items: center; gap: 6px; width: 100%; }
+.g-main .g-line input { flex: 1; min-width: 0; padding: 5px 8px; font-size: 0.84rem; }
+
 /* --- rubric panels ---------------------------------------------------------- */
 /* The version panels, as one group that can be locked while a change is on its way. */
 .g-boxes { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
@@ -254,4 +283,3 @@ summary { cursor: pointer; color: var(--muted); }
   border-top: 1px solid var(--border); padding: 8px 0; font-size: 0.86rem;
 }
 .g-scroll { max-height: 320px; overflow-y: auto; }
-.g-disabled { opacity: 0.55; }

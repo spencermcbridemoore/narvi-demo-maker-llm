@@ -24,12 +24,21 @@ export function StepLayout({ children, side }: { children: ReactNode; side?: Rea
   );
 }
 
-/** The small mark on a box that code filled. The sentence explains what was done. */
+/**
+ * The small mark on a box that was filled for the owner: by code from the file, or
+ * with a problem text the AI took from pasted material. The sentence explains which.
+ */
 export function FilledMark({ finding }: { finding: Finding | undefined }) {
   if (!finding) return null;
+  if (finding.code === "ai_version_text_draft")
+    return (
+      <span className="g-ai inferred" title={finding.message}>
+        AI draft
+      </span>
+    );
   return (
     <span className="g-mark" title={finding.message}>
-      filled in for you
+      {finding.code === "ai_version_text" ? "from your pasted material" : "filled in for you"}
     </span>
   );
 }
@@ -103,7 +112,13 @@ export function FindingList({ findings }: { findings: Finding[] }) {
           <span className="g-hint">
             {" "}
             {f.row ? `(file row ${f.row}) ` : ""}
-            {f.filled === "code" ? "· filled in for you" : f.filled === "owner" ? "· needs you" : ""}
+            {f.code.startsWith("ai_")
+              ? ""
+              : f.filled === "code"
+                ? "· filled in for you"
+                : f.filled === "owner"
+                  ? "· needs you"
+                  : ""}
           </span>
         </li>
       ))}

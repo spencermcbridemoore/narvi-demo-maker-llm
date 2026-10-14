@@ -13,8 +13,62 @@ export type Criterion = {
   points: number; // the weight; 0 = not set yet
   accept: string[];
   reject: string[];
-  origin: string; // teacher | copied | ai | ai_inferred
+  origin: string; // who wrote the statement: teacher | copied | ai | ai_inferred
+  ai_lines: string[]; // accept and reject lines exactly as an accepted AI draft wrote them
 };
+
+/** One rubric item as the AI drafted it. It is not part of the rubric until it is accepted. */
+export type ProposedItem = {
+  key: string;
+  text: string; // "" = the item's own statement stays, and only the lists are drafted
+  points: number;
+  accept: string[];
+  reject: string[];
+  source_text: string; // what it restates: the example item, or words found in the pasted material
+  inferred: boolean; // nothing of the owner's backs it: accepted on its own
+  note: string;
+};
+/** An AI draft for one version, waiting to be accepted or discarded. */
+export type Proposal = {
+  id: string;
+  mode: "example" | "material" | "text" | "elaborate";
+  problem_id: string;
+  example_id: string;
+  version_text: string; // a problem text taken from the pasted material, for a version without one
+  version_text_found: boolean; // ... and found in it word for word
+  items: ProposedItem[];
+  notes: string[]; // the AI's own notes
+  remarks: string[]; // what the grader noticed about the draft
+  model: string;
+  created: number;
+  stale: boolean; // what it was drafted from has changed since
+};
+/** The draft being written, or what is left to say about one that could not be. */
+export type Drafting = {
+  running: boolean;
+  total: number;
+  done: number;
+  model: string;
+  started: number;
+  failed: { problem_id: string; message: string; detail: string }[];
+};
+/** What the AI could draft for the bank as it is now (version ids). */
+export type AiOptions = {
+  example: string; // the version others are drafted from; "" when no version has items
+  from_example: string[]; // versions without a rubric that can be drafted from it
+  carry_over: string[]; // versions whose own items lack forms or exclusions the example has
+  elaborate: string[]; // versions whose own items can be elaborated
+  from_text: string[]; // versions without a rubric, with only their problem text to go on
+  from_material: string[]; // versions without a rubric: pasted material can be drafted into them
+  needs_text: string[]; // versions without a rubric and without a problem text
+};
+export type DraftRequest = {
+  mode: Proposal["mode"];
+  problem_ids?: string[];
+  example_id?: string;
+  material?: string;
+};
+
 export type ResponseItem = {
   id: string;
   problem_id: string; // "" = version unknown
@@ -50,6 +104,7 @@ export type Check = {
   can_approve: boolean;
   can_grade: boolean;
   to_fill: Box[];
+  to_decide: Box[]; // AI drafts waiting to be accepted or discarded
   grade_blockers: GradeBlocker[];
   warnings: string[];
   rubric_state: "none" | "some" | "all";
@@ -81,10 +136,14 @@ export type Bank = {
   rubric_revision: number;
   rubric_approved_at: number | null;
   findings: Finding[];
-  ai_fill: boolean;
+  ai_fill: boolean; // "let the AI fill gaps"
+  proposals: Proposal[];
   held_responses: number;
+  has_material: boolean; // pasted material is kept on the server to draft from, until approval
   check: Check;
   running: boolean;
+  drafting: Drafting | null;
+  ai: AiOptions;
 };
 
 export type BankSummary = {
@@ -138,6 +197,7 @@ export type RubricItem = {
   points: number;
   accept?: string[];
   reject?: string[];
+  origin?: string;
 };
 export type RubricVersion = { id: string; text: string; instructions: string; items: RubricItem[] };
 export type RunSummary = {
@@ -171,6 +231,8 @@ export type Health = {
   profile: string;
   model: string;
   prompt_version: string;
+  draft_model?: string;
+  draft_prompt_version?: string;
   kit: boolean;
   efforts: string[];
   hard_flags: string[];
@@ -282,6 +344,8 @@ export const api = {
     call<Bank>("/assessments/problem-info", post({ name, csv, responses_csv })),
   loadExample: (problem_id: string, wording: string) =>
     call<Bank>("/assessments/example", post({ problem_id, wording })),
+  draftFromMaterial: (name: string, material: string) =>
+    call<Bank>("/assessments/material", post({ name, material })),
   getBank: (id: string) => call<Bank>(`/assessments/${id}`),
   deleteBank: (id: string) =>
     call<{ deleted: string; runs: number; cached_samples: number }>(`/assessments/${id}`, send("DELETE")),
@@ -299,6 +363,19 @@ export const api = {
     call<Bank & { copied_to: string[] }>(`/assessments/${id}/rubric/copy`, post({ problem_id, to })),
   approve: (id: string) => call<Bank & { warnings: string[] }>(`/assessments/${id}/rubric/approve`, post()),
   unlock: (id: string) => call<Bank>(`/assessments/${id}/rubric/unlock`, post()),
+
+  // AI drafts. A draft is written in the background; the bank's `drafting` says how far it is.
+  startDraft: (id: string, body: DraftRequest) => call<Bank>(`/assessments/${id}/drafts`, post(body)),
+  cancelDraft: (id: string) => call<Bank>(`/assessments/${id}/drafts/cancel`, post()),
+  acceptProposal: (id: string, proposal_id: string, keys: string[], version_text = false) =>
+    call<Bank & { accepted: string[]; left: string[]; text_left: boolean }>(
+      `/assessments/${id}/proposals/accept`,
+      post({ proposal_id, keys, version_text }),
+    ),
+  /** Without keys and without version_text: the whole draft. */
+  discardProposal: (id: string, proposal_id: string, keys?: string[], version_text = false) =>
+    call<Bank>(`/assessments/${id}/proposals/discard`, post({ proposal_id, keys: keys ?? null, version_text })),
+  setAiFill: (id: string, on: boolean) => call<Bank>(`/assessments/${id}/ai-fill`, send("PUT", { on })),
 
   attachResponses: (id: string, csv: string) =>
     call<Bank & { findings: Finding[] }>(`/assessments/${id}/responses`, post({ csv })),

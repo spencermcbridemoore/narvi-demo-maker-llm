@@ -54,9 +54,12 @@ class Criterion(BaseModel):
     text: str = ""          # the statement the grader is told
     source_text: str = ""   # the teacher's original wording, kept for reference
     points: float = 1.0     # the weight; 0 means "not set yet"
-    accept: list[str] = Field(default_factory=list)   # acceptable forms (used from Phase 2)
-    reject: list[str] = Field(default_factory=list)   # "does not count" exclusions (Phase 2)
-    origin: str = "teacher"  # teacher | copied | ai | ai_inferred
+    accept: list[str] = Field(default_factory=list)   # acceptable forms
+    reject: list[str] = Field(default_factory=list)   # "does not count" exclusions
+    origin: str = "teacher"  # who wrote the statement: teacher | copied | ai | ai_inferred
+    # The accept and reject lines exactly as an accepted AI draft wrote them. A line
+    # stays marked as the AI's while it still reads the same.
+    ai_lines: list[str] = Field(default_factory=list)
 
 
 class Response(BaseModel):
@@ -86,6 +89,42 @@ class Finding(BaseModel):
     row: int | None = None  # spreadsheet row, for the details view only
 
 
+class ProposedItem(BaseModel):
+    """One rubric item as the AI drafted it, waiting for the owner."""
+
+    key: str                # from code, never from the model
+    text: str = ""          # the drafted statement; "" when the item's own statement stays as it is
+    points: float = 1.0     # from code: the example's weight, the item's own, or the material's (else 1)
+    accept: list[str] = Field(default_factory=list)
+    reject: list[str] = Field(default_factory=list)
+    source_text: str = ""   # what it restates: the example item's wording, or words found in the pasted material
+    inferred: bool = False  # nothing of the owner's backs it, so it is accepted on its own
+    note: str = ""          # the AI's remark on this item
+    base: str = ""          # fingerprint of the statement it was drafted for ("" = the item did not exist)
+
+
+class Proposal(BaseModel):
+    """An AI draft for one version. It is kept apart from ``criteria``: the check, the
+    hash, runs and exports never read it, so nothing in it is used until the owner
+    accepts it (``rubric.accept_proposal``)."""
+
+    id: str
+    mode: str                           # example | material | text | elaborate (see draft.py)
+    problem_id: str                     # the version it is for
+    example_id: str = ""                # the version it was adapted from (mode "example")
+    version_text: str = ""              # a problem text taken from the pasted material, for a version without one
+    version_text_found: bool = False    # ... and code found it word for word in that material
+    items: list[ProposedItem] = Field(default_factory=list)
+    order: list[str] = Field(default_factory=list)     # every drafted key, in order, to place an accepted item
+    notes: list[str] = Field(default_factory=list)     # the AI's own notes: where it filled in or was unsure
+    remarks: list[str] = Field(default_factory=list)   # what code noticed about the draft
+    reported: bool = False              # its notes have been added to the bank's findings
+    model: str = ""
+    prompt_version: str = ""
+    created: float = 0.0
+    inputs: str = ""                    # fingerprint of what it was drafted from (draft.inputs_print)
+
+
 class Assessment(BaseModel):
     id: str = ""
     name: str
@@ -105,7 +144,9 @@ class Assessment(BaseModel):
     rubric_approved_at: float | None = None
     findings: list[Finding] = Field(default_factory=list)
     held_responses_csv: str = ""            # from the all-at-once shortcut; untouched until approval
-    ai_fill: bool = False                   # "let the AI fill gaps". Stored now, used from Phase 2
+    ai_fill: bool = False                   # "let the AI fill gaps": draft empty rubrics without asking
+    proposals: list[Proposal] = Field(default_factory=list)    # AI drafts waiting for the owner
+    material: str = ""                      # pasted material a draft was made from; dropped at approval
 
     def criteria_for(self, problem_id: str) -> list[Criterion]:
         return [c for c in self.criteria if c.problem_id == problem_id]

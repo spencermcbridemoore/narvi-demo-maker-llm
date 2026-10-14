@@ -3,8 +3,8 @@
 Agreed 2026-10-12. This file is the spec for the work that follows the MVP in
 [GRADER.md](GRADER.md). Update it when a decision changes; do not let it drift.
 
-- **Status:** Phase 1 is built (2026-10-12, branch `grader-p1-problem-bank`, one PR into
-  `grader-mvp`). Next is Phase 2, on a fresh branch off `grader-mvp`.
+- **Status:** Phase 1 is merged (PR #5, c6c15a9 on `grader-mvp`) and deployed. Phase 2 is
+  built on branch `grader-p2-drafting` (section 9), one PR into `grader-mvp`.
 - **Each phase:** ends runnable, with tests, and waits for the owner's OK before the next.
   A fresh branch per phase, one PR per phase into `grader-mvp`.
 
@@ -49,15 +49,19 @@ The owner's replies so far (2026-10-10), both unanswered:
 3. **Hard stops, enforced in the API and not only in the UI:**
    - no approval while the bank is incomplete (every version needs problem text and at
      least one item with text and a positive weight);
+   - no approval while an AI draft is undecided or still being written (from Phase 2);
    - no responses attached before the rubric is approved;
    - no grading without an approved rubric and responses;
    - a response whose version is unknown cannot be graded.
 4. **AI rules (from Phase 2).**
-   - "Let the AI fill gaps" is a setting, off by default.
+   - "Let the AI fill gaps" is a setting, off by default. Off: the AI drafts only when the
+     owner presses a button, and Chen's question (#2 step 6) is one of those buttons. On:
+     it drafts every empty rubric it can without asking (section 9.1).
    - AI output is a proposal. Nothing it writes is used until the owner accepts it, and it
      reports every place it filled in.
-   - Everything the AI wrote is marked. Items the source never mentioned are "inferred" and
-     are accepted one by one.
+   - Everything the AI wrote is marked. Text that the owner's own material does not back is
+     "inferred" and is accepted one by one. Code decides what is inferred, not the model
+     (section 9.3).
    - The drafting model never sees student responses. Pasted text is data, not instructions.
    - Binary items only. Each item has a statement, acceptable forms, and explicit "does
      not count" exclusions (Chen's finding). The teacher's own wording is kept as
@@ -100,12 +104,35 @@ Also agreed: rubric edits are "revisions"; the hash covers everything the grader
 and each run keeps a copy of the rubric it used; drafting has a third entry, "elaborate my
 existing items"; drafts are proposals until accepted; the test batch extends the same run.
 
+Phase 2 decisions (2026-10-13):
+
+10. **What "let the AI fill gaps" means:** off, the AI drafts only when a button is
+    pressed, and Chen's question is one of those buttons. On, it drafts every empty rubric
+    it can as soon as it is switched on, including a rubric from the problem text alone,
+    which is never drafted while it is off. From Phase 3 it also runs right after upload.
+11. **Acceptable forms and exclusions in the Problem Info CSV:** two optional columns,
+    `acceptable_forms` and `does_not_count`, one entry per line, written only when an item
+    has any. It is Chen's file format, so it is also a question for him (section 7).
+12. **Real model calls in Phase 2:** a small number, one per way in plus retries, five at
+    most.
+13. **Changes to the Phase 2 plan** (proposed with the design, and confirmed by the owner
+    after the browser walk-through):
+    - approval is refused while an AI draft is undecided or still being written;
+    - "elaborate" covers one version at a time, and "from an example" carries accepted
+      forms and exclusions over to the other versions, so that versions of one problem
+      keep asking for the same thing;
+    - what "elaborate" suggests is all inferred, so it is accepted item by item;
+    - pasted material drafts one version per paste; more versions are added and drafted
+      from it;
+    - elaboration never runs by itself, whatever the switch says, until Phase 4 has
+      measured it.
+
 ## 4. Phases
 
 | Phase | What | Done when |
 |---|---|---|
 | 1 | One problem bank, no AI (#1; #2 steps 1-5 and 7). Sections 5-6 below. | In the browser: upload a problem-info CSV with a partial rubric, finish it by hand, approve, add responses, grade, export. Existing tests pass, including the kit baseline check. Then deploy. |
-| 2 | Rubric drafting (#2 step 6, plus the paste feature). One module, three ways in: (a) from an example version to the other versions; (b) from pasted unstructured material to a draft bank, downloadable as a Problem Info CSV; (c) elaborate existing items with acceptable forms and exclusions. Same output type and the same review screen. Turns on "let the AI fill gaps". | A two-version bank with one rubric gets a generated rubric for the other, shown for approval. Pasting a problem plus solution gives a draft bank that can be edited, approved and downloaded. Unit tests use a fake model; one small real call proves the path. |
+| 2 | Rubric drafting (#2 step 6, plus the paste feature). One module, three ways in: (a) from an example version to the other versions; (b) from pasted unstructured material to a draft bank, downloadable as a Problem Info CSV; (c) elaborate existing items with acceptable forms and exclusions. Same output type and the same review screen. Turns on "let the AI fill gaps". Section 9 below. | A two-version bank with one rubric gets a generated rubric for the other, shown for approval. Pasting a problem plus solution gives a draft bank that can be edited, approved and downloaded. Unit tests use a fake model; a small number of real calls proves the path (decision 12). |
 | 3 | Settings (#3): its own panel or tab. Votes, reasoning effort, parallel calls, test fraction, and a model per task from a server-provided list (gpt-5, gpt-5-mini; defaults: rubric gpt-5, grading gpt-5-mini, feedback gpt-5-mini). "Test fraction" = grade a random X% first, review, then grade the rest, by extending the same run. | A run uses the chosen grading model; drafting uses its model; "test batch, then the rest" does not pay twice for the test items while the rubric is unchanged. |
 | 4 | Measure on the Chen kit: simple rubric vs AI-elaborated vs Chen's detailed. Tune on two problems, report on the third. Add Chen's #4 sample as a fixture when it arrives. | The three-way table, with counts, and a decision on the AI defaults. |
 | 5 | Feedback generation, minimal, in Chen's format from the kit (`prompt_templates.csv`). | The third model setting does something. |
@@ -197,7 +224,7 @@ grading, and names the empty boxes, so the list shrinks as they are filled.
 
 ### 5.3 Who can fill which gap
 
-| Gap | Plain code fills it (Phase 1) | AI may draft it (Phase 2+, only with "let the AI fill gaps" on, always held for acceptance) | Nobody can fill it for you |
+| Gap | Plain code fills it (Phase 1) | AI may draft it (Phase 2+: when asked, or without asking while "let the AI fill gaps" is on; always held for acceptance) | Nobody can fill it for you |
 |---|---|---|---|
 | Problem id missing | Yes: `v1`, `v2`, ... in file order | | |
 | Item number missing | Yes: 1, 2, ... | | |
@@ -355,6 +382,9 @@ samples: no real student work.
 4. (#3, to post) Does "fraction of test gradings" mean grading a random X% first so the
    instructor can review before the rest are graded?
 5. (#2, to post) Is the soft-handling compromise acceptable in place of "raise error"?
+6. (#2, to post) Should acceptable forms and "does not count" exclusions be columns of
+   their own in the Problem Info CSV (`acceptable_forms`, `does_not_count`), or part of
+   the rubric item cell, as in his detailed rubrics? Columns are written until he answers.
 
 ## 8. Working rules
 
@@ -362,3 +392,158 @@ samples: no real student work.
   without asking the owner first.
 - Keep DemoBuilder working: the grader shares its backend process, its deploy and its
   Azure quota.
+
+## 9. Phase 2 spec (as built)
+
+Agreed 2026-10-13 (decisions 10 to 13) and built the same day on `grader-p2-drafting`.
+
+### 9.1 The rule everything else follows
+
+An AI draft is a **proposal**. It is stored next to the rubric (`Assessment.proposals`),
+never in it. The check, the hash, runs and the CSV download do not read proposals, so
+text the owner has not accepted cannot reach the grader. Accepting an item copies it into
+the rubric through `rubric.accept_proposal`, which is the only way AI text gets there.
+
+"Let the AI fill gaps" (decision 10): off, the AI drafts only when a button is pressed. On,
+switching it on drafts every empty rubric it can: from the example where a version has
+one; otherwise from the problem text alone, and then for the first version only (the
+others are drafted from it once it is accepted). It never elaborates by itself, and never
+drafts over a draft that is waiting. From Phase 3 it also becomes a default applied at
+upload.
+
+### 9.2 Three ways in, one module (`backend/app/grader/draft.py`)
+
+| Way in (`mode`) | Works on | The model writes | Code decides | Accepted |
+|---|---|---|---|---|
+| (a) From an example version (`example`) | Versions without a rubric. Also versions whose own items lack acceptable forms or exclusions the example has ("carry over"). | Each item's statement, acceptable forms and exclusions, adapted to that version. | Keys, weights, order and the number of items are the example's. Forms and exclusions only where the example item has them, and no more of them than it has. An item the owner wrote keeps its statement and weight: only the lists it lacks are drafted. | All at once, or item by item |
+| (b) From pasted material (`material`) | A new one-version bank, or one version without a rubric in an open bank. One version per paste. | Items, each with the words of the material that back it; the problem text, copied, when the version has none. | Every quote and the problem text are looked for in the pasted text. An item with no quote found is inferred. Items are numbered in order; the weight is the material's, else 1. At most 10 items. | Backed items and a problem text found word for word: together. Inferred ones: one by one |
+| (b, weakest) From the problem text alone (`text`) | The same, with nothing pasted. Only while the switch is on. | Items. | Everything is inferred, whatever the model returns. | One by one |
+| (c) Elaborate my items (`elaborate`) | One version that has items. | Acceptable forms and exclusions only (at most 5 each). | Statements, keys and weights stay the owner's: the model is not asked for them. Lines the item already has are not repeated. | Item by item: every suggestion is inferred |
+
+Order of work for a bank with several versions: elaborate one version, accept what is
+wanted, then carry it over to the others with (a). Elaborating each version separately
+would give versions of one problem different acceptance rules.
+
+### 9.3 What code decides, in detail
+
+- **Inferred** means that nothing of the owner's backs the text. Code decides it: an item
+  drafted from material is backed only by quotes that `draft.found_in` finds in the pasted
+  text (the forgiving comparison the grader uses for its quotes: case, spacing and quote
+  marks do not matter; a passage under 12 characters proves nothing). What (c) suggests
+  and what is drafted from the problem text alone is always inferred. What (a) adapts from
+  an item the owner already has is not.
+- **One at a time.** `accept_proposal` takes an inferred item, or a problem text that was
+  not found word for word, only when it is asked for on its own. In a call that asks for
+  more, it is left waiting and named in `left`.
+- **A draft never overwrites the owner.** A drafted item is refused if its place has been
+  filled by hand since; suggested lists are refused if the item was reworded since
+  (`ProposedItem.base`); a drafted problem text is refused if the box has text now. The
+  call is refused before anything is changed.
+- **A waiting draft is replaced only by a draft of the same kind** ("Draft again"). Asking
+  for another kind for that version is refused, so nothing undecided disappears.
+- **Stale.** Each draft carries a fingerprint of what it was made from. The screen says
+  when the example's rubric or a problem text has changed since.
+- **The model's key is only a label.** An answer for an item that does not exist is left
+  out, and so is a second answer for the same item. Both are reported on the draft.
+- **Marks.** An accepted statement has `origin` `ai` or `ai_inferred` until it is reworded
+  (then it is the teacher's, as with `copied`). Accepted lines are kept in
+  `Criterion.ai_lines`, and a line stays marked while it reads the same. A run's rubric
+  copy records the origin. Every acceptance leaves a line in the bank's findings.
+
+### 9.4 Data model
+
+All new fields have defaults, so Phase 1 files load. The Phase 1 build ignores fields it
+does not know, so it can still read Phase 2 files after a rollback.
+
+- **`Proposal`** (one per version): `mode`, `problem_id`, `example_id`, `version_text` and
+  `version_text_found`, `items`, `order`, `notes` (the AI's), `remarks` (what code noticed),
+  `model`, `prompt_version`, `created`, `inputs` (the fingerprint).
+- **`ProposedItem`**: `key`, `text` (empty when the item's own statement stays), `points`,
+  `accept`, `reject`, `source_text` (what it restates), `inferred`, `note`, `base`.
+- **`Assessment`** gains `proposals` and `material` (the pasted text, kept only until the
+  rubric is approved, and never sent back to the browser). **`Criterion`** gains `ai_lines`.
+- `check` gains `to_decide`: one entry per waiting draft item. Approval needs it empty.
+- A draft in progress is kept in memory only. A restart loses a draft in flight and
+  nothing else.
+
+### 9.5 Prompts and the model
+
+- `prompts/draft_system.txt` is shared; `draft_example.txt`, `draft_material.txt`,
+  `draft_text.txt` and `draft_elaborate.txt` hold the task for each way in. Their hash,
+  with the output schemas, is `DRAFT_PROMPT_VERSION`, recorded on every draft.
+- The grading prompts are untouched: `PROMPT_VERSION` is still `21999e7c82`, so cached
+  samples stay valid. A test pins that value.
+- **No student work.** The prompt builders take versions and items, never a bank or a
+  response. A test puts a marker in every response and checks that no prompt contains it.
+- **Pasted text is data.** Each block of the owner's text is closed by a tag carrying a
+  code made for that call, so the text cannot close it. The template is filled in one
+  pass, so nothing inside the text is expanded. A pasted line that reads like an
+  instruction to an AI is reported on the draft.
+- Model: a new `rubric` role on the strong tier (gpt-5), reasoning effort `medium`
+  (`GRADER_DRAFT_EFFORT`). One call per version, three at a time, three attempts.
+
+### 9.6 API (under `/grader/api`)
+
+| Call | Behaviour |
+|---|---|
+| `POST /assessments/material` | `{name, material}` → a draft bank (source `paste`) with one empty version, and drafting starts. 400 only for an empty paste. Material over 60,000 characters is cut, with a finding saying so. |
+| `POST /assessments/{id}/drafts` | `{mode, problem_ids?, example_id?, material?}`. Starts a draft and answers at once. 409 when the rubric is locked, the bank is legacy, or grading or a draft is in progress. 422 with a plain sentence, and the boxes when there are any, when nothing can be drafted. Versions it has to skip are named in `drafting.failed`. |
+| `POST /assessments/{id}/drafts/cancel` | Stops the draft, or clears what is left to say about one that failed. An answer still on its way back is not kept. |
+| `POST /assessments/{id}/proposals/accept` | `{proposal_id, keys, version_text?}` → the bank, with `accepted`, `left` and `text_left`. Draft only. |
+| `POST /assessments/{id}/proposals/discard` | `{proposal_id, keys?, version_text?}`. Without keys and without `version_text`: the whole draft. |
+| `PUT /assessments/{id}/ai-fill` | `{on}`. Switching it on drafts as in 9.1. |
+| `GET /assessments/{id}` | Adds `proposals` (each with `stale`), `drafting` (progress, and what could not be drafted), `ai` (what could be drafted now), `has_material`, and `check.to_decide`. |
+| `POST /assessments/{id}/rubric/approve` | Also 422 while a draft is undecided, and 409 while one is being written. |
+| `GET /assessments/{id}/problem-info.csv`, and upload | The columns `acceptable_forms` and `does_not_count`, one entry per line, written only when an item has any (decision 11). The wide shape reads `acceptable_forms_1` and so on. |
+| `GET /health` | Adds `draft_model` and `draft_prompt_version`. |
+
+Deleting a bank drops a draft that is still being written for it.
+
+### 9.7 UI
+
+- **Problem step.** "Paste unstructured material" in "Other ways to start" is live: a text
+  box and "Draft a rubric from this". It says not to paste student work.
+- **Rubric step, the question.** When versions lack a rubric and one has it: "Version v2
+  has no rubric yet. Do you want the AI to draft it from version v1?" with "Yes, draft it"
+  and "No, I will write it" (which goes to the empty box). Each empty version also has
+  "Generate based on v1" next to "Write the first item" and "Copy".
+- **Rubric step, the review.** A draft shows in its version's panel, dashed and violet,
+  headed "AI draft ... Nothing here is part of the rubric until you accept it", with what
+  the AI reported. Each item has Accept and Discard, what it was adapted from or the words
+  of the material behind it, and "inferred" where that applies. Suggestions for an item
+  the owner wrote show under that item. "Accept N items" takes everything that is not
+  inferred.
+- **New boxes.** Every item has "Acceptable forms and exclusions (optional)": two lists,
+  one line per entry, editable by hand.
+- **Counter and approval.** "N boxes still to fill" and "N AI drafts to accept or
+  discard". Approve & lock stays off until both are zero and no draft is being written.
+- **Side box.** The switch; which version to draft from; "Elaborate my existing items";
+  "Draft from pasted material" for one version.
+- **While drafting.** "The AI is drafting ..." with Cancel. It survives a reload: the page
+  asks the server how far the draft is.
+- The locked view and the Review drawer show the lists and the "AI draft" marks.
+
+### 9.8 Tests and real calls
+
+- `backend/tests/test_grader_draft.py`: 32 tests on a fake model, covering each way in,
+  the rules in 9.3, the prompts (no response text; pasted text stays data), the refusals,
+  the CSV columns, and the API flows of both "done when" cases, including grading with an
+  accepted draft.
+- Real calls, 2026-10-13, gpt-5 at `medium`, in the browser walk-through: from an example
+  (about 20 s), elaborate (about 45 s), carry over (about 35 s), pasted material (about
+  70 s), and the switch drafting from the problem text alone, with a page reload while it
+  drafted (about 40 s). Five calls, the agreed limit; every output shape was accepted by
+  Azure, and each draft was accepted or discarded through the screen.
+- Not seen on screen with the real model: a failed call (the fake-model tests cover what
+  the API answers).
+
+### 9.9 Left open
+
+- Chen's sample (#4) has not arrived, so (a) was tried on a made-up two-version bank.
+  His file becomes a fixture when it comes.
+- A discarded drafted item leaves a gap in the item numbers (1, 2, 4).
+- The quote check is word for word: an equation the model retypes in another notation
+  counts as inferred. That errs on the careful side.
+- The pasted-material call is slow (about 70 s). `GRADER_DRAFT_EFFORT=low` shortens it;
+  whether that costs quality has not been measured.
+- The CLI cannot draft. Phase 4 needs it for the "AI-elaborated" arm.

@@ -1,0 +1,15 @@
+Draft a rubric from the problem statement alone.
+
+The instructor has given no solution and no grading notes. Every item you write is therefore your own inference, and the instructor will decide on each one separately.
+
+items: the few things a correct and complete response to this problem must show, one binary item each, in the order a solution would reach them. Write at most {{max_items}} items, and do not split one step into several items.
+
+For each item:
+- statement: what the response must show.
+- acceptable_forms and does_not_count: leave them empty, unless the problem statement itself settles them.
+- source_quotes and weight_in_material: leave them empty.
+- note: leave it empty, unless the instructor should know something about this item.
+
+problem_text: leave it empty.
+
+{{problem}}
