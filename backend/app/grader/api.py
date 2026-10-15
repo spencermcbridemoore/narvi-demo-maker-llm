@@ -29,11 +29,11 @@ from ..config import LLM_PROFILE
 from . import draft, metrics, rubric, runner, store
 from .adapters import (
     CHEN_SOURCE, CHEN_VERSIONS, NothingToLoad, chen_problems, chen_responses, kit_dir, load_chen,
-    load_problem_info, parse_responses, problem_info_csv,
+    load_problem_info, parse_responses, problem_info_csv, read_rubric_yaml,
 )
 from .aggregate import HARD_FLAGS
 from .grade import EFFORTS, PROMPT_VERSION, model_name
-from .model import Assessment, Finding, Text, text_fingerprint
+from .model import Assessment, Finding, Text, every_version, text_fingerprint
 
 router = APIRouter(prefix="/grader/api", tags=["grader"])
 
@@ -195,7 +195,7 @@ async def list_assessments():
             "id": aid, "name": a.name if a else aid,
             "kind": "unreadable" if a is None else "bank" if a.kind == "bank" else "legacy",
             "source": a.source if a else "", "versions": len(a.problems) if a else 0,
-            "items": len(a.criteria) if a else 0, "responses": len(a.responses) if a else 0,
+            "items": a.item_count() if a else 0, "responses": len(a.responses) if a else 0,
             "runs": runs.get(aid, 0),
             "rubric_status": a.rubric_status if a else "draft",
             "rubric_revision": a.rubric_revision if a else 0,
@@ -208,11 +208,29 @@ class ProblemInfoIn(BaseModel):
     name: Text = ""
     csv: Text = ""
     responses_csv: Text = ""    # the all-at-once shortcut: held until the rubric is approved
+    rubric: Text = ""           # a rubric file (Chen's YAML), as the rubric every version shares
+
+
+_ITEM_BOXES = {"items", "item", "item_key", "item_text", "weight"}
+
+
+def _use_rubric_file(bank: Assessment, items: list, findings: list[Finding]) -> None:
+    """A rubric file's items as the rubric every version shares. What was noted about
+    the items it replaces, or about versions without any, no longer holds."""
+    bank.criteria = items
+    bank.findings = [f for f in bank.findings if not (f.scope == "rubric" and (
+        f.box in _ITEM_BOXES or f.code in ("rubric_shared", "rubric_file_not_used")))]
+    n, versions = len(items), len(bank.problems)
+    bank.findings += findings + [Finding(
+        code="rubric_from_file", filled="code", box="file",
+        message=f"The rubric file gives {n} item{'' if n == 1 else 's'}: the rubric "
+                + (f"{every_version(versions)} share." if versions > 1 else "of the problem."))]
 
 
 @router.post("/assessments/problem-info")
 async def assessment_from_problem_info(body: ProblemInfoIn):
-    """A draft bank with findings. The only error is a file with nothing to load."""
+    """A draft bank with findings. The only errors are a file with nothing to load as
+    problems, and one of Chen's YAML files sent as the problems."""
     try:
         bank, _ = load_problem_info(body.csv, body.name)
     except NothingToLoad as exc:
@@ -223,6 +241,18 @@ async def assessment_from_problem_info(body: ProblemInfoIn):
         except NothingToLoad as exc:
             raise _stop(400, str(exc))
         bank.held_responses_csv = body.responses_csv
+    if body.rubric.strip():
+        try:
+            items, findings = read_rubric_yaml(body.rubric)
+        except NothingToLoad as exc:
+            raise _stop(400, str(exc))
+        if bank.criteria:
+            bank.findings.append(Finding(
+                code="rubric_file_not_used", filled="code", box="file",
+                message="The problem file has rubric items of its own, so the rubric file was not "
+                        "used. To use it instead, add it on the Rubric step."))
+        else:
+            _use_rubric_file(bank, items, findings)
     return _bank(_register(bank))
 
 
@@ -305,22 +335,62 @@ class ItemIn(BaseModel):
     key: Text = ""
     text: Text = ""
     points: float | None = None     # None = not set yet
+    specifications: list[Text] = Field(default_factory=list)
+    # A page still open from Phase 2 sends two lists; their lines are kept as specifications.
     accept: list[Text] = Field(default_factory=list)
     reject: list[Text] = Field(default_factory=list)
 
 
 class RubricIn(BaseModel):
-    problem_id: Text
+    problem_id: Text                # "" = the rubric every version shares
     items: list[ItemIn]
 
 
 @router.put("/assessments/{aid}/rubric")
 async def replace_rubric(aid: str, body: RubricIn):
-    """Replace one version's items."""
+    """Replace the shared items, or one version's own."""
     def change(a: Assessment) -> None:
         rubric.set_items(a, body.problem_id, [i.model_dump() for i in body.items])
 
     return _change(aid, change)
+
+
+class RubricFileIn(BaseModel):
+    text: Text = ""
+    replace: bool = False           # the bank has rubric items already: replace them
+
+
+@router.post("/assessments/{aid}/rubric/file")
+async def rubric_from_file(aid: str, body: RubricFileIn):
+    """A rubric file (Chen's YAML) as the rubric every version shares. 400 when the
+    text is not such a rubric; 409, asking first, when the bank has rubric items and
+    ``replace`` is not set. Replacing drops the AI drafts made for the old items."""
+    try:
+        items, findings = read_rubric_yaml(body.text)
+    except NothingToLoad as exc:
+        raise _stop(400, str(exc))
+
+    def change(a: Assessment) -> dict:
+        rubric.require_draft(a)
+        if a.criteria and not body.replace:
+            raise rubric.Refusal("This bank already has rubric items. Replace them with the rubric "
+                                 "in the file?", kind="exists")
+        _use_rubric_file(a, items, findings)
+        a.proposals = [p.model_copy(update={"items": [], "order": []}) for p in a.proposals if p.version_text]
+        return {"items": len(items)}
+
+    return _change(aid, change)
+
+
+class ShareIn(BaseModel):
+    problem_id: Text                # the version whose items every version is to share
+
+
+@router.post("/assessments/{aid}/rubric/share")
+async def share_rubric(aid: str, body: ShareIn):
+    """Make one version's items the rubric every version shares. Versions with the same
+    items, or none, use it as it is; the others keep theirs as their own wording."""
+    return _change(aid, lambda a: {"sharing": rubric.share_items(a, body.problem_id)})
 
 
 class CopyIn(BaseModel):

@@ -9,7 +9,7 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 export function draftSource(p: Proposal): string {
   switch (p.mode) {
     case "example":
-      return `adapted from version ${p.example_id}`;
+      return p.example_id ? `adapted from version ${p.example_id}` : "this version's own wording of the shared rubric";
     case "material":
       return "drafted from your pasted material";
     case "text":
@@ -25,6 +25,9 @@ const INFERRED: Record<Proposal["mode"], string> = {
   text: "Inferred: the AI's own idea of what a response must show.",
   elaborate: "Inferred: the AI's reading of your statement. Check that it asks for exactly what you mean.",
 };
+
+/** Where an item lives, in words: the rubric every version shares, or one version. */
+export const whereItems = (problemId: string) => (problemId ? `version ${problemId}` : "the shared rubric");
 
 /** The small mark on text the AI wrote. */
 export function AiMark({ inferred, title }: { inferred?: boolean; title?: string }) {
@@ -53,7 +56,7 @@ export function OriginMark({ origin }: { origin: string | undefined }) {
   return null;
 }
 
-/** One list of an item (acceptable forms, or does not count), read-only. */
+/** An item's specifications, read-only. */
 export function Lines({ label, lines, aiLines = [] }: { label: string; lines: string[]; aiLines?: string[] }) {
   if (!lines.length) return null;
   return (
@@ -70,7 +73,7 @@ export function Lines({ label, lines, aiLines = [] }: { label: string; lines: st
   );
 }
 
-/** One list of an item as boxes to edit: one line per entry. */
+/** An item's specifications as boxes to edit: one line per entry. */
 export function LinesEditor({
   label,
   placeholder,
@@ -143,16 +146,17 @@ export function ProposedItemCard({
         <span className="g-hint">not part of the rubric yet</span>
       </div>
       {whole && <pre className="g-pre">{item.text}</pre>}
-      <Lines label="Acceptable forms" lines={item.accept} />
-      <Lines label="Does not count" lines={item.reject} />
+      <Lines label="Specifications" lines={item.specifications} />
       {item.inferred && <p className="g-hint">{INFERRED[proposal.mode]}</p>}
       {item.note && <p className="g-warn">The AI notes: {item.note}</p>}
       {item.source_text && (
         <details className="g-orig">
           <summary>
-            {proposal.mode === "example"
-              ? `The item of version ${proposal.example_id} it was adapted from`
-              : "The words of your material behind it"}
+            {proposal.mode !== "example"
+              ? "The words of your material behind it"
+              : proposal.example_id
+                ? `The item of version ${proposal.example_id} it was adapted from`
+                : "The shared item it was adapted from"}
           </summary>
           <pre className="g-pre">{item.source_text}</pre>
         </details>
@@ -246,7 +250,9 @@ export function ProposalHead({
       </p>
       {proposal.stale && (
         <p className="g-warn">
-          {proposal.mode === "example"
+          {proposal.mode === "example" && !proposal.example_id
+            ? "The shared rubric or this version's problem text was changed after this draft was made."
+            : proposal.mode === "example"
             ? `Version ${proposal.example_id}'s rubric or one of the two problem texts was changed after this draft was made.`
             : proposal.mode === "material"
               ? "Other material was pasted after this draft was made."

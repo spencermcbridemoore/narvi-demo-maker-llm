@@ -23,9 +23,12 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import yaml
+
 from ..config import REPO_ROOT
 from . import rubric
-from .model import Assessment, Criterion, Finding, Problem, Response
+from .model import (ALSO_COUNTS, DOES_NOT_COUNT, SHARED, Assessment, Criterion, Finding, Problem, Response,
+                    every_version)
 
 # Rubric wordings available in the kit's instances.csv. ``simple`` is the wording
 # the human graders used; the detailed ones are Chen's model-facing rewrites, which
@@ -318,7 +321,9 @@ _TEXT = ["rubric_item", "rubric_items", "criterion_text", "item_text", "criterio
          "rubric_text", "description", "rubric", "text", "item", "items"]
 _WEIGHT = ["weight", "rubric_score", "score", "points", "max_points", "rubric_weight",
            "item_weight"]
-# Optional: an item's acceptable forms and its "does not count" exclusions, one per line.
+# Optional: an item's specifications, one per line. Phase 2 wrote acceptable forms and
+# "does not count" exclusions in two columns; they are still read, as specifications.
+_SPECS = ["specifications", "specification", "specs"]
 _ACCEPT = ["acceptable_forms", "acceptable_form", "acceptable", "accepted_forms", "accept"]
 _REJECT = ["does_not_count", "exclusions", "exclusion", "not_accepted", "reject"]
 _AMBIGUOUS_PID = {"problem", "question", "q"}   # may hold the problem text instead of an id
@@ -329,9 +334,16 @@ _WIDE_TEXT = re.compile(
 _WIDE_WEIGHT = re.compile(
     r"^(?:weight|rubric_score|score|points?|max_points|rubric_weight|item_weight)_?(\d+)$"
     r"|^(?:rubric_items?|items?|criterion)_?(\d+)_(?:weight|rubric_score|score|points?)$")
+_WIDE_SPECS = re.compile(r"^(?:specifications?|specs)_?(\d+)$")
 _WIDE_ACCEPT = re.compile(r"^(?:acceptable_forms?|acceptable|accepted_forms|accept)_?(\d+)$")
 _WIDE_REJECT = re.compile(r"^(?:does_not_count|exclusions?|not_accepted|reject)_?(\d+)$")
-_WIDE = (_WIDE_TEXT, _WIDE_WEIGHT, _WIDE_ACCEPT, _WIDE_REJECT)
+_WIDE = (_WIDE_TEXT, _WIDE_WEIGHT, _WIDE_SPECS, _WIDE_ACCEPT, _WIDE_REJECT)
+
+
+def _specs(specs: str, accept: str = "", reject: str = "") -> list[str]:
+    """An item's specifications from its cells, the two Phase 2 lists included."""
+    return (_lines(specs) + [ALSO_COUNTS + a for a in _lines(accept)]
+            + [DOES_NOT_COUNT + r for r in _lines(reject)])
 
 # Chen's whole-rubric cells mark each item with a "# Item n:" line.
 _ITEM_MARK = re.compile(r"^[ \t]*#+[ \t]*item[ \t]*(\d+)[ \t]*[:.)\-]?[ \t]*", re.I | re.M)
@@ -388,8 +400,7 @@ class _ItemRow:
     row: int
     joined: bool        # the row had no problem id and was put with the version above
     shared_weight: int  # > 0: this many items share one weight cell
-    accept: list[str] = field(default_factory=list)
-    reject: list[str] = field(default_factory=list)
+    specs: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -451,21 +462,19 @@ class _Bank:
                       value=version.instructions, row=row)
 
     def rubric_cell(self, version: Problem, key: str, text: str, raw_weight: str, row: int,
-                    joined: bool = False, accept: list[str] | None = None,
-                    reject: list[str] | None = None) -> None:
+                    joined: bool = False, specs: list[str] | None = None) -> None:
         """One row's rubric cell: a single item, or several behind "# Item n:" marks.
         Items wait in ``pending`` until every row is read (see ``number_items``)."""
         split = _split_items(text)
         if split is None:
-            self.pending.append(_ItemRow(version, key, text, raw_weight, row, joined, 0,
-                                         accept or [], reject or []))
+            self.pending.append(_ItemRow(version, key, text, raw_weight, row, joined, 0, specs or []))
             return
         parts, lead = split
-        if accept or reject:
+        if specs:
             self.note("lists_not_used",
                       f"Version {version.id}: one rubric cell holds several items, so the "
-                      "acceptable forms and exclusions next to it could not be matched to an "
-                      "item and were not used.",
+                      "specifications next to it could not be matched to an item and were not "
+                      "used.",
                       problem_id=version.id, row=row)
         if lead:
             self.note("rubric_cell_lead",
@@ -543,8 +552,43 @@ class _Bank:
                       "owner", "item_text", **where)
         items.append(Criterion(
             id=f"{version.id}#{key}", problem_id=version.id, key=key, label=f"Item {key}",
-            text=it.text, source_text=it.text, points=points, accept=it.accept, reject=it.reject,
+            text=it.text, source_text=it.text, points=points, specifications=it.specs,
         ))
+
+    def share(self) -> list[Criterion]:
+        """Decision 15: one rubric for every version is the default. Items the file
+        gives for one version only, or the same items for every version, become the
+        shared rubric; items that differ between versions stay each version's own.
+        Returns the shared items (none when the versions differ)."""
+        with_items = [v for v in self.versions if self.items[v.id]]
+        if not with_items:
+            return []
+        first = with_items[0]
+        n = len(self.versions)
+        if len(with_items) == 1:
+            why = (f"The file gives rubric items for version {first.id} only, so they are the "
+                   f"rubric of {every_version(n)}.") if n > 1 else ""
+        elif len(with_items) == n and all(
+                rubric.items_shape(self.items[v.id]) == rubric.items_shape(self.items[first.id]) for v in with_items):
+            why = (f"Every version has the same rubric items in the file, so they are kept once, "
+                   f"as the rubric of {every_version(n)}.")
+        else:
+            return []
+        shared = [c.model_copy(update={"id": f"*#{c.key}", "problem_id": SHARED}) for c in self.items[first.id]]
+        item_boxes = {"item_key", "item", "weight", "item_text"}
+        kept = []
+        for f in self.findings:     # what was said about the items now belongs to the shared ones
+            if f.box in item_boxes and f.problem_id == first.id:
+                f.problem_id = SHARED
+            elif f.box in item_boxes and f.problem_id:
+                continue            # the same said about another version's copy of them
+            kept.append(f)
+        self.findings = kept
+        for v in self.versions:
+            self.items[v.id] = []
+        if why:
+            self.note("rubric_shared", why, "code")
+        return shared
 
 
 def load_problem_info(csv_text: str, name: str = "") -> tuple[Assessment, list[Finding]]:
@@ -558,12 +602,25 @@ def load_problem_info(csv_text: str, name: str = "") -> tuple[Assessment, list[F
 
         problem_id,problem_text,rubric_item_1,weight_1,rubric_item_2,weight_2
 
-    Either shape may carry an item's acceptable forms and its "does not count"
-    exclusions, one per line in a cell: ``acceptable_forms`` and ``does_not_count``
-    (``acceptable_forms_1`` ... in the wide shape).
+    Either shape may carry an item's specifications, one per line in a cell:
+    ``specifications`` (``specifications_1`` ... in the wide shape). Phase 2's
+    ``acceptable_forms`` and ``does_not_count`` columns are read as specifications.
 
-    Raises ``NothingToLoad`` only when there is nothing in the file to load.
+    Items the file gives for one version only, or the same for every version, become
+    the rubric all versions share (decision 15).
+
+    Raises ``NothingToLoad`` when there is nothing in the file to load, and when the
+    file is one of Chen's YAML files: those are not tables of problems.
     """
+    kind = yaml_kind(csv_text)[0]
+    if kind == "rubric":
+        raise NothingToLoad(
+            "This is a rubric file (YAML), not a table of problems, so there is nothing in it to "
+            "load as problems. Upload the problems first, then add this rubric on the Rubric step.")
+    if kind == "bank":
+        raise NothingToLoad(
+            "This is a problem bank in YAML, not a table of problems. Reading it comes in the next "
+            "update of the grader.")
     table = _table(csv_text, "The problem info file")
     bank = _Bank()
     for code, message, filled in table.notes:
@@ -576,12 +633,13 @@ def load_problem_info(csv_text: str, name: str = "") -> tuple[Assessment, list[F
     ptext_col = cols.take(_PTEXT)
     instr_col = cols.take(_INSTRUCTIONS)
     weight_col = cols.take(_WEIGHT)
+    specs_col = cols.take(_SPECS)
     accept_col = cols.take(_ACCEPT)
     reject_col = cols.take(_REJECT)
     key_col = cols.take(_KEY)
     text_col = cols.take(_TEXT)
 
-    # item number -> its [text, weight, acceptable forms, does not count] columns
+    # item number -> its [text, weight, specifications, acceptable forms, does not count] columns
     wide: dict[int, list[int | None]] = {}
     for i, norm in enumerate(cols.norm):
         if i in cols.used:
@@ -591,7 +649,7 @@ def load_problem_info(csv_text: str, name: str = "") -> tuple[Assessment, list[F
         if slot is None:
             continue
         number = int(next(g for g in matches[slot].groups() if g))
-        found = wide.setdefault(number, [None, None, None, None])
+        found = wide.setdefault(number, [None] * len(_WIDE))
         if found[slot] is None:     # a second column for the same item stays "not used"
             found[slot] = i
             cols.used.add(i)
@@ -608,12 +666,12 @@ def load_problem_info(csv_text: str, name: str = "") -> tuple[Assessment, list[F
                 bank.note("columns_renumbered",
                           f"The file has the column {cols.names([text_col])} next to numbered "
                           "item columns, so we read it as item 1 and moved the others up by one.")
-            wide[1] = [text_col, weight_col, accept_col, reject_col]
-            text_col = weight_col = accept_col = reject_col = None
+            wide[1] = [text_col, weight_col, specs_col, accept_col, reject_col]
+            text_col = weight_col = specs_col = accept_col = reject_col = None
         # One row per version: other unnumbered item columns have no meaning here.
-        cols.used -= {c for c in (key_col, text_col, weight_col, accept_col, reject_col)
+        cols.used -= {c for c in (key_col, text_col, weight_col, specs_col, accept_col, reject_col)
                       if c is not None}
-        key_col = text_col = weight_col = accept_col = reject_col = None
+        key_col = text_col = weight_col = specs_col = accept_col = reject_col = None
 
     if not cols.used:
         # No column name recognized: assume the documented order, and say so.
@@ -647,22 +705,21 @@ def load_problem_info(csv_text: str, name: str = "") -> tuple[Assessment, list[F
         pid, ptext, instr = cell(pid_col), cell(ptext_col), cell(instr_col)
         if is_wide:
             numbered_items = [
-                (n, cell(t), cell(w), _lines(cell(a)), _lines(cell(r)))
-                for n, (t, w, a, r) in sorted(wide.items())
-                if cell(t) or cell(w) or cell(a) or cell(r)
+                (n, cell(t), cell(w), _specs(cell(s), cell(a), cell(r)))
+                for n, (t, w, s, a, r) in sorted(wide.items())
+                if cell(t) or cell(w) or cell(s) or cell(a) or cell(r)
             ]
             if not (pid or ptext or instr or numbered_items):
                 continue
             version = bank.version(pid, row_no)     # one row per version: a repeat is a duplicate
             bank.describe(version, ptext, instr, row_no)
-            for n, text, raw_weight, accept, reject in numbered_items:
-                bank.rubric_cell(version, str(n), text, raw_weight, row_no,
-                                 accept=accept, reject=reject)
+            for n, text, raw_weight, specs in numbered_items:
+                bank.rubric_cell(version, str(n), text, raw_weight, row_no, specs=specs)
             continue
 
         key, text, raw_weight = cell(key_col), cell(text_col), cell(weight_col)
-        accept, reject = _lines(cell(accept_col)), _lines(cell(reject_col))
-        if not (pid or ptext or instr or key or text or raw_weight or accept or reject):
+        specs = _specs(cell(specs_col), cell(accept_col), cell(reject_col))
+        if not (pid or ptext or instr or key or text or raw_weight or specs):
             continue
         joined = False
         if pid:
@@ -676,19 +733,20 @@ def load_problem_info(csv_text: str, name: str = "") -> tuple[Assessment, list[F
             version = bank.version("", row_no)
         current = version
         bank.describe(version, ptext, instr, row_no)
-        if key or text or raw_weight or accept or reject:
-            bank.rubric_cell(version, key, text, raw_weight, row_no, joined, accept, reject)
+        if key or text or raw_weight or specs:
+            bank.rubric_cell(version, key, text, raw_weight, row_no, joined, specs)
 
     if not bank.versions:
         raise NothingToLoad(
             "The problem info file has column names but no rows, so there is nothing to load.")
     bank.number_items()
+    shared = bank.share()
 
     for p in bank.versions:
         if not p.text:
             bank.note("version_text_missing", f"Version {p.id} has no problem text in the file.",
                       "owner", "version_text", problem_id=p.id)
-        if not bank.items[p.id]:
+        if not shared and not bank.items[p.id]:
             bank.note("rubric_missing", f"Version {p.id} has no rubric items in the file.",
                       "owner", "items", problem_id=p.id)
     if bank.numbered_in_order:
@@ -701,20 +759,97 @@ def load_problem_info(csv_text: str, name: str = "") -> tuple[Assessment, list[F
     assessment = Assessment(
         name=(name or "").strip() or "Problem bank", source="csv", kind="bank",
         rubric_version="uploaded", problems=bank.versions,
-        criteria=[c for p in bank.versions for c in bank.items[p.id]],
+        criteria=shared + [c for p in bank.versions for c in bank.items[p.id]],
         findings=bank.findings,
     )
     return assessment, bank.findings
 
 
+# --- Chen's YAML files -------------------------------------------------------
+
+def yaml_kind(text: str) -> tuple[str, object]:
+    """("rubric" | "bank", the parsed file) for one of Chen's YAML files, else ("", None).
+    Only text that starts like YAML is parsed, and only those two shapes count, so a
+    CSV is never taken for YAML."""
+    first = next((line for line in (text or "").lstrip("﻿").splitlines()
+                  if line.strip() and not line.lstrip().startswith("#")), "")
+    if not re.match(r"^[A-Za-z_][\w ]*:(\s|$)", first):
+        return "", None
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError:
+        return "", None
+    if isinstance(data, dict) and isinstance(data.get("rubrics"), list):
+        return "rubric", data
+    if isinstance(data, dict) and isinstance(data.get("questions"), list):
+        return "bank", data
+    return "", None
+
+
+def read_rubric_yaml(text: str) -> tuple[list[Criterion], list[Finding]]:
+    """A rubric in Chen's YAML (``judgment``, then ``rubrics``: ``id``, ``item``,
+    ``specifications``) as the rubric every version shares, plus findings. It has no
+    weights, so each item is worth 1, marked as filled in. Raises ``NothingToLoad``
+    when the text is not such a rubric or has no items."""
+    kind, data = yaml_kind(text)
+    if kind != "rubric":
+        raise NothingToLoad("This is not a rubric file: it needs a list of items under \"rubrics\".")
+    found: list[Finding] = []
+
+    def note(code: str, message: str, filled: str = "note", box: str = "file", **where) -> None:
+        found.append(Finding(code=code, message=message, filled=filled, box=box, **where))
+
+    judgment = str(data.get("judgment") or "").strip()
+    if judgment and judgment.lower() != "binary":
+        note("judgment_not_binary",
+             f'The rubric says its items are judged "{judgment}". The grader judges every item '
+             "as credit or no credit.", "code")
+    items: list[Criterion] = []
+    taken: set[str] = set()
+    for n, entry in enumerate(data["rubrics"], start=1):
+        if not isinstance(entry, dict):
+            note("rubric_entry_skipped", f"Entry {n} of the rubric is not an item, so it was not used.")
+            continue
+        wanted = str(entry.get("id") if entry.get("id") is not None else "").strip()
+        key = rubric.unique_id(wanted, taken) if wanted else rubric.next_item_key(taken)
+        taken.add(rubric.norm_id(key))
+        if not wanted:
+            note("item_number_filled", f"One item of the rubric had no id, so we numbered it {key}.",
+                 "code", "item_key", problem_id=SHARED, item_key=key, value=key)
+        elif key != wanted:
+            note("item_number_duplicate",
+                 f"Two items of the rubric have the id {wanted}. We kept both and numbered the "
+                 f"second one {key}.", "code", "item_key", problem_id=SHARED, item_key=key, value=key)
+        text_ = _tidy(str(entry.get("item") or ""))
+        specs = entry.get("specifications") or []
+        specs = [_tidy(str(s)) for s in (specs if isinstance(specs, list) else [specs]) if str(s).strip()]
+        others = [str(k) for k in entry if k not in ("id", "item", "specifications")]
+        if others:
+            note("rubric_keys_ignored",
+                 f"Item {key} of the rubric has fields the grader does not use: {', '.join(others)}.")
+        if not text_:
+            note("item_text_missing", f"Item {key} of the rubric has no text in the file.",
+                 "owner", "item_text", problem_id=SHARED, item_key=key)
+        note("weight_filled", f"Item {key} of the rubric has no weight in the file, so we set it to 1.",
+             "code", "weight", problem_id=SHARED, item_key=key, value="1")
+        items.append(Criterion(
+            id=f"*#{key}", problem_id=SHARED, key=key, label=f"Item {key}", text=text_,
+            source_text=text_, points=1.0, specifications=specs,
+        ))
+    if not items:
+        raise NothingToLoad("The rubric file has no items, so there is nothing to load.")
+    return items, found
+
+
 def problem_info_csv(bank: Assessment) -> str:
-    """The bank's current rubric as a Problem Info CSV in the long shape. The
-    ``instructions``, ``item``, ``acceptable_forms`` and ``does_not_count`` columns
-    appear only when they carry something. AI drafts that are still waiting are not
-    part of the rubric, so they are not in the file."""
+    """The bank's current rubric as a Problem Info CSV in the long shape: under each
+    version, the items it is graded with, so a shared rubric is written under every
+    version (read back, the same items for every version are shared again). The
+    ``instructions``, ``item`` and ``specifications`` columns appear only when they
+    carry something. AI drafts that are still waiting are not part of the rubric, so
+    they are not in the file."""
     with_instructions = any(p.instructions.strip() for p in bank.problems)
-    with_accept = any(c.accept for c in bank.criteria)
-    with_reject = any(c.reject for c in bank.criteria)
+    with_specs = any(c.specifications for c in bank.criteria)
     plain_keys = all(
         [c.key for c in bank.criteria_for(p.id)] == [str(i + 1) for i in range(len(bank.criteria_for(p.id)))]
         for p in bank.problems
@@ -723,8 +858,7 @@ def problem_info_csv(bank: Assessment) -> str:
     header += ["instructions"] if with_instructions else []
     header += [] if plain_keys else ["item"]
     header += ["rubric_item", "weight"]
-    header += ["acceptable_forms"] if with_accept else []
-    header += ["does_not_count"] if with_reject else []
+    header += ["specifications"] if with_specs else []
 
     buf = io.StringIO()
     out = csv.writer(buf, lineterminator="\n")
@@ -738,10 +872,8 @@ def problem_info_csv(bank: Assessment) -> str:
                 row.append(c.key if c else "")
             # A weight that is not set yet stays empty; any other number is written in full.
             row += [c.text, "" if c.points == 0 else f"{c.points:.15g}"] if c else ["", ""]
-            if with_accept:
-                row.append("\n".join(c.accept) if c else "")
-            if with_reject:
-                row.append("\n".join(c.reject) if c else "")
+            if with_specs:
+                row.append("\n".join(c.specifications) if c else "")
             out.writerow(row)
     return buf.getvalue()
 

@@ -4,11 +4,11 @@ The material may hold a problem statement, a worked solution, grading notes, a p
 
 {{problem_task}}
 
-items: the things a response must show to earn credit, one binary item each, in the order a solution would reach them. Prefer the instructor's own grading notes or point scheme where the material has them. Otherwise use the decisive steps of the solution. Write at most {{max_items}} items, and do not split one step into several items.
+items: the things a response must show to earn credit, one binary item each, in the order a solution would reach them. Prefer the instructor's own grading notes or point scheme where the material has them. Otherwise use the decisive steps of the solution. Write at most {{max_items}} items, and do not split one step into several items.{{shared_note}}
 
 For each item:
 - statement: what the response must show.
-- acceptable_forms and does_not_count: only entries the material itself supports, such as an alternative form it shows or a mistake it says earns no credit. Leave them empty otherwise.
+- specifications: only lines the material itself supports, such as an alternative form it shows or a mistake it says earns no credit. Leave the list empty otherwise.
 - source_quotes: the exact words of the material that state or show this requirement, copied character for character, one passage per entry. Leave it empty when the material does not contain the requirement. The item is then your own inference and is marked as one.
 - weight_in_material: the points the material gives this item, as the material writes them. Leave it empty when the material gives none.
 - note: leave it empty, unless the instructor should know something about this item.

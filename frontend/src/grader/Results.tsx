@@ -7,7 +7,9 @@ import type { ReactNode } from "react";
 
 import {
   api,
+  itemsFor,
   needsReview,
+  SHARED,
   type Bank,
   type Cell,
   type CellCompact,
@@ -19,7 +21,7 @@ import {
   type RunSummary,
 } from "./api";
 import { download, toCsv } from "./csv";
-import { OriginMark } from "./Drafts";
+import { Lines, OriginMark } from "./Drafts";
 import { ConfirmButton, RunProblem, SideBox, StepLayout, deleteBankQuestion, fmtDate, isLegacy } from "./parts";
 import { displayId, errMsg, f2, fmtInt, pct } from "./util";
 
@@ -71,7 +73,7 @@ export function Results({ bank, run, runs, idMap, hardFlags, onRunChange, onOpen
         id: p.id,
         text: p.text,
         instructions: p.instructions,
-        items: bank.criteria.filter((c) => c.problem_id === p.id),
+        items: itemsFor(bank, p.id),
       })),
     [run.rubric_copy, bank.problems, bank.criteria],
   );
@@ -618,6 +620,8 @@ function CellDrawer({
   const ref = bank.references[iid];
   const evidence = (cell?.samples ?? []).filter((s) => s.verdict === compact.final).flatMap((s) => s.evidence);
   const current = bank.criteria.find((c) => c.id === criterion.id);
+  // The versions shared a rubric in this run, so an item of a version is its own wording.
+  const sharedRubric = versions.some((v) => v.items.some((c) => c.problem_id === SHARED));
 
   return (
     <aside className="g-drawer">
@@ -667,20 +671,15 @@ function CellDrawer({
       )}
       <h4>
         Rubric item {recorded ? "as this run used it" : ""} <OriginMark origin={criterion.origin} />
+        {criterion.problem_id !== undefined && criterion.problem_id !== SHARED && sharedRubric && (
+          <span className="g-tag">this version's own wording</span>
+        )}
       </h4>
       <pre className="g-pre">{criterion.text}</pre>
-      {(criterion.accept?.length ?? 0) > 0 && (
-        <>
-          <p className="g-hint">Acceptable forms</p>
-          <ul className="g-details-list">{criterion.accept!.map((a) => <li key={a}>{a}</li>)}</ul>
-        </>
-      )}
-      {(criterion.reject?.length ?? 0) > 0 && (
-        <>
-          <p className="g-hint">Does not count</p>
-          <ul className="g-details-list">{criterion.reject!.map((a) => <li key={a}>{a}</li>)}</ul>
-        </>
-      )}
+      <Lines label="Specifications" lines={criterion.specifications ?? []} />
+      {/* Runs graded before the one list kept two. */}
+      <Lines label="Acceptable forms" lines={criterion.accept ?? []} />
+      <Lines label="Does not count" lines={criterion.reject ?? []} />
       {!recorded && <p className="g-hint">Rubric not recorded for this run. This is the bank's current wording.</p>}
       {revised && (
         <p className="g-hint">

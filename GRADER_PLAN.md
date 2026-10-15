@@ -3,8 +3,10 @@
 Agreed 2026-10-12. This file is the spec for the work that follows the MVP in
 [GRADER.md](GRADER.md). Update it when a decision changes; do not let it drift.
 
-- **Status:** Phase 1 is merged (PR #5, c6c15a9 on `grader-mvp`) and deployed. Phase 2 is
-  built on branch `grader-p2-drafting` (section 9), one PR into `grader-mvp`.
+- **Status:** Phases 1 and 2 are merged and deployed (Phase 2: PR #6, 8fb1c8e, live since
+  2026-10-14). Phase 2b, making Chen's real files load (section 10), comes in two PRs: first
+  branch `grader-p2b-chen-files` (his Question 7 files; built, see 10.1), then his bank YAML
+  and a Rubric step for 20 to 36 versions.
 - **Each phase:** ends runnable, with tests, and waits for the owner's OK before the next.
   A fresh branch per phase, one PR per phase into `grader-mvp`.
 
@@ -17,7 +19,7 @@ Dr. Chen (GitHub `Zhongzhou`) filed four issues on 2026-09-28. They are requirem
 | [#1](https://github.com/spencermcbridemoore/narvi-demo-maker-llm/issues/1) | Grade one problem at a time, not a whole exam. Wording: "upload problem / problem bank and response", never "Load exam". "One problem" includes one drawn at random from a problem bank. Whole-exam grading comes later, on top. |
 | [#2](https://github.com/spencermcbridemoore/narvi-demo-maker-llm/issues/2) | A **Problem Info CSV** replaces the rubric CSV: problem ids and problem text, plus optional rubric items and rubric score (weight). Every item is binary for now. All problems in one file are isomorphic versions. If no version has a rubric, the Rubric screen requires one for at least one version. If some versions lack one, ask whether to use AI: yes = generate from the existing rubric as the example and show every generated rubric; no = write them by hand, one at a time, with a "generate based on example" button. Only when every version has a rubric, ask for student responses. |
 | [#3](https://github.com/spencermcbridemoore/narvi-demo-maker-llm/issues/3) | A settings panel (collapsible, or its own tab): number of votes, "fraction of test gradings", and a model chosen from a list, separately for rubric generation, grading and feedback generation. |
-| [#4](https://github.com/spencermcbridemoore/narvi-demo-maker-llm/issues/4) | Placeholder. He will attach sample problem-info data for one isomorphic bank. Nothing attached as of 2026-10-12. |
+| [#4](https://github.com/spencermcbridemoore/narvi-demo-maker-llm/issues/4) | His sample arrived 2026-10-13 19:54 UTC as a comment: an explanations CSV (ID, ItemID, ProblemBody, EarnedPoints, Explanation; 250 answers to 20 versions) and "Question 7 Grading Rubric.yaml" (five binary items with specifications, one rubric for all versions, no weights). He also pointed to a 36-question multiple-choice bank in his public ESTELA repo. Phase 2b (section 10) makes these load. |
 
 The owner adds one feature: paste unstructured material and get a draft rubric (Phase 2).
 
@@ -113,6 +115,7 @@ Phase 2 decisions (2026-10-13):
 11. **Acceptable forms and exclusions in the Problem Info CSV:** two optional columns,
     `acceptable_forms` and `does_not_count`, one entry per line, written only when an item
     has any. It is Chen's file format, so it is also a question for him (section 7).
+    *Reversed by decision 14 (2026-10-14): one `specifications` column.*
 12. **Real model calls in Phase 2:** a small number, one per way in plus retries, five at
     most.
 13. **Changes to the Phase 2 plan** (proposed with the design, and confirmed by the owner
@@ -127,12 +130,36 @@ Phase 2 decisions (2026-10-13):
     - elaboration never runs by itself, whatever the switch says, until Phase 4 has
       measured it.
 
+Phase 2b decisions (2026-10-14), after Chen's sample arrived:
+
+14. **One `specifications` list per item**, as in Chen's rubric YAML, replaces the two lists
+    (acceptable forms / does not count). Items saved with the two lists still load: their
+    lines become specifications that start "Also counts:" or "Does not count:".
+15. **A shared rubric is the default:** one rubric for all versions of a bank, as Chen's is
+    written. Wording of its own for one version is the exception. In a Problem Info CSV,
+    items given for one version only, or identical for every version, become the shared
+    rubric, with a sentence saying so; items that differ between versions load as each
+    version's own.
+16. **Phase 2 stays live** (it was already deployed when this was decided). Phase 2b is
+    deployed when it is done.
+17. **Two PRs:** first his Question 7 files, then his bank YAML and a Rubric step for 20 to
+    36 versions.
+18. **A frontend test tool,** for development only (vitest with happy-dom), so the HTML
+    cleaning and the file recognition in the browser are tested.
+19. **Real calls:** up to five, on made-up fixtures. None with Chen's student answers; that
+    is a Phase 4 decision.
+
+Also agreed: EarnedPoints is not uploaded and not used until Chen says what it is for; his
+explanations CSV is never committed (the repo is public), and fixtures are made-up files
+with the same columns and markup.
+
 ## 4. Phases
 
 | Phase | What | Done when |
 |---|---|---|
 | 1 | One problem bank, no AI (#1; #2 steps 1-5 and 7). Sections 5-6 below. | In the browser: upload a problem-info CSV with a partial rubric, finish it by hand, approve, add responses, grade, export. Existing tests pass, including the kit baseline check. Then deploy. |
 | 2 | Rubric drafting (#2 step 6, plus the paste feature). One module, three ways in: (a) from an example version to the other versions; (b) from pasted unstructured material to a draft bank, downloadable as a Problem Info CSV; (c) elaborate existing items with acceptable forms and exclusions. Same output type and the same review screen. Turns on "let the AI fill gaps". Section 9 below. | A two-version bank with one rubric gets a generated rubric for the other, shown for approval. Pasting a problem plus solution gives a draft bank that can be edited, approved and downloaded. Unit tests use a fake model; a small number of real calls proves the path (decision 12). |
+| 2b | Make Chen's real files load (#4), in two PRs. First: one specifications list per item, a shared rubric by default, his explanations export and his rubric YAML, and recognising a file before loading it. Second: his bank YAML and a Rubric step for 20 to 36 versions. Section 10. | First PR: his explanations CSV and Question 7 rubric give a 20-version bank whose answers are held until approval and whose rubric is shared by every version. Second PR: his bank YAML gives 36 versions, and the Rubric step stays usable. |
 | 3 | Settings (#3): its own panel or tab. Votes, reasoning effort, parallel calls, test fraction, and a model per task from a server-provided list (gpt-5, gpt-5-mini; defaults: rubric gpt-5, grading gpt-5-mini, feedback gpt-5-mini). "Test fraction" = grade a random X% first, review, then grade the rest, by extending the same run. | A run uses the chosen grading model; drafting uses its model; "test batch, then the rest" does not pay twice for the test items while the rubric is unchanged. |
 | 4 | Measure on the Chen kit: simple rubric vs AI-elaborated vs Chen's detailed. Tune on two problems, report on the third. Add Chen's #4 sample as a fixture when it arrives. | The three-way table, with counts, and a decision on the AI defaults. |
 | 5 | Feedback generation, minimal, in Chen's format from the kit (`prompt_templates.csv`). | The third model setting does something. |
@@ -385,6 +412,16 @@ samples: no real student work.
 6. (#2, to post) Should acceptable forms and "does not count" exclusions be columns of
    their own in the Problem Info CSV (`acceptable_forms`, `does_not_count`), or part of
    the rubric item cell, as in his detailed rubrics? Columns are written until he answers.
+   *Superseded by decision 14 and question 11.*
+7. (#4, to post) Is the Question 7 rubric used as is for all 20 versions, or is it the
+   example for generating one per version?
+8. (#4, to post) What is EarnedPoints for: grade everyone, or only those without full
+   answer credit?
+9. (#4, to post) For the multiple-choice bank: will students write explanations, and is a
+   rubric coming?
+10. (#4, to post) Will every export have these five columns?
+11. (#4, to post) Is one specifications list also what the tool should write when the AI
+    adds to a rubric?
 
 ## 8. Working rules
 
@@ -539,11 +576,106 @@ Deleting a bank drops a draft that is still being written for it.
 
 ### 9.9 Left open
 
-- Chen's sample (#4) has not arrived, so (a) was tried on a made-up two-version bank.
-  His file becomes a fixture when it comes.
+- (a) was tried on a made-up two-version bank. *Correction (2026-10-14): this said Chen's
+  sample had not arrived. It had, on 2026-10-13, during the build; the issues were checked
+  only at the start. Phase 2b (section 10) handles it.*
 - A discarded drafted item leaves a gap in the item numbers (1, 2, 4).
 - The quote check is word for word: an equation the model retypes in another notation
   counts as inferred. That errs on the careful side.
 - The pasted-material call is slow (about 70 s). `GRADER_DRAFT_EFFORT=low` shortens it;
   whether that costs quality has not been measured.
 - The CLI cannot draft. Phase 4 needs it for the "AI-elaborated" arm.
+
+## 10. Phase 2b spec: Chen's real files
+
+Agreed 2026-10-14 (decisions 14 to 19). What his files are (checked on copies, never
+committed):
+
+- **Explanations export** (`..._explanations.csv`): `ID, ItemID, ProblemBody, EarnedPoints,
+  Explanation`. 250 answers to 20 ItemIDs, 3 to 18 each, one ProblemBody per ItemID. The
+  problem texts are plain text; the 20 versions are one physics problem told with different
+  objects and numbers. 227 answers are Canvas HTML (`p`, `sub`, `sup`, `br`, lists, `span`,
+  `&nbsp;`), and 57 of them hold 173 equation images, each with its LaTeX in
+  `data-equation-content`. EarnedPoints is 0.0 or 2.0.
+- **Rubric YAML** ("Question 7 Grading Rubric.yaml"): `judgment: binary` and `rubrics:`, a
+  list of `id`, `item` and `specifications`. Five items, no weights, no versions.
+- **Bank YAML** (ESTELA repo): `bank_info` and 36 `questions`, each `multiple_choice` with
+  `id`, `title`, `points`, HTML `text` with `\( \)` math, a `figure`, `answers` (text and
+  `correct`) and `feedback.general`. Twelve scenarios at three positions each.
+- Before Phase 2b, the explanations CSV loaded as 250 versions (one per student), the rubric
+  YAML as 29 empty versions and the bank YAML as 308; as answers to a 20-version bank, 0 of
+  250 found a version.
+
+### 10.1 First PR (`grader-p2b-chen-files`)
+
+- **One specifications list (decision 14).** `Criterion.specifications` replaces `accept`
+  and `reject`. The grader is told the statement, then "Specifications:" and one line per
+  entry; an item without specifications is told its statement alone, as before, so cached
+  samples stay valid and the grading prompt version stays `21999e7c82`. The rubric hash of
+  an item without specifications is what it was. The CSV has one `specifications` column;
+  the two Phase 2 columns are still read and converted. "Elaborate", "carry over" and pasted
+  material write specifications.
+- **Shared rubric (decision 15).** An item whose `problem_id` is empty is shared by every
+  version. A version's own wording is an item of that version with the same key, and its
+  weight is always the shared item's. What a version is graded with is the shared items,
+  with its own wording in place of a shared item's, then any items of its own that are not
+  shared. The grader, the hash, each run's rubric copy and the check use that. Banks saved
+  before have only per-version items and behave as before. A new bank's rubric is shared.
+  In a shared bank the AI can draft a version's own wording from the shared rubric, and
+  "elaborate" works on the shared rubric with every version's problem text as context.
+- **Recognising a file.** The upload box on the Problem step takes one or more files and
+  names each kind in a sentence before anything loads: a Problem Info CSV, an explanations
+  export, a rubric YAML, a bank YAML (recognised; read in the second PR), a responses file.
+  A file of another kind is never loaded as versions; the server refuses YAML sent as a CSV.
+- **Explanations export.** In the browser: versions are the ItemIDs, each with its cleaned
+  ProblemBody; answers are cleaned, names stripped and ids swapped as before, and held
+  until approval. EarnedPoints never leaves the browser.
+- **Cleaning Canvas HTML, in the browser.** Only text with real HTML tags is changed, so
+  "a < b" stays. Equation images become `\( LaTeX \)`; subscripts and superscripts become
+  `_{...}` and `^{...}`; paragraphs, line breaks and list items become line breaks;
+  `&nbsp;` becomes a space. Cleaning comes before name stripping.
+- **Rubric YAML.** Read on the server. Item numbers from `id`, statements from `item`,
+  specifications as written, weight 1 each marked "filled in for you", and a sentence when
+  `judgment` is not binary. It becomes the shared rubric. It can be chosen together with
+  the explanations export, or added on the Rubric step.
+
+**As built (2026-10-14).** Besides the above:
+
+- A bank without any rubric asks for it once ("The rubric needs at least one item. It is used
+  for every version."), not once per version. A version's own wording of a shared item is
+  that item: the item counts (`check.counts.items`, the saved-banks list) count it once.
+- A rubric file used at upload replaces the upload's "no rubric items" notes with one
+  sentence ("The rubric file gives 5 items: the rubric all 20 versions share."). On the
+  Rubric step, replacing a rubric asks first, and drops the AI drafts and the notes about
+  the items it replaces. A Problem Info CSV that has items of its own keeps them, and says
+  the rubric file was not used.
+- "Use these items for every version" (`POST .../rubric/share`, banks with a rubric per
+  version): another version keeps, as its own wording, only the items it words differently.
+- A version's own wording drafted by AI leaves out items the AI gives back word for word
+  (a real gpt-5 call did that for a version whose problem the shared wording already fit);
+  when every item comes back unchanged, there is no draft and the screen says "The AI found
+  nothing to draft for version X. The shared wording fits this version as it is."
+- The Problem step has one file box that takes several files; it replaces the side box's
+  "problem info and responses together". A responses file is held with a Problem Info
+  CSV, and left out (with a sentence) next to an explanations export, which holds the
+  answers already. A bank YAML or an empty file is named and left out.
+- The run drawer shows an item's specifications, and the two lists for runs made before.
+- Browser-side tests: vitest and happy-dom, dev dependencies only (`npm test` in
+  `frontend/`): HTML cleaning, recognising files, which files load together, and the
+  explanations split, on the made-up fixtures.
+- Checked locally on copies of his real files, with nothing uploaded or committed and only
+  counts printed: 250 answers to 20 versions; 173 equations kept as LaTeX in 57 answers; no
+  tag or entity left in any answer or problem text; only the id, the ItemID and the answer
+  would be uploaded. With his rubric, the bank has 5 shared items (weight 1, 2 to 5
+  specifications each) and can be approved at once.
+- Real calls: three to gpt-5, on the made-up fixtures only (elaborating the shared rubric;
+  a version's own wording, twice). Drafting prompt version `fb3edf4c79`; the grading prompt
+  version is still `21999e7c82`.
+
+### 10.2 Second PR
+
+His bank YAML: one version per question (the question and its answer choices); which
+choice is correct, and the feedback, kept as that version's drafting material and never
+told to the grader; a sentence that the grader cannot see figures. A Rubric step for 20 to
+36 versions: the shared rubric on top, a compact list of versions below, one open at a
+time.

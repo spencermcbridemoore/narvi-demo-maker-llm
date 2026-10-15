@@ -7,8 +7,11 @@ majority vote is the grade, and how strongly the votes agree is the confidence.
 A teacher reviews the uncertain or flagged items, and everything exports as CSV.
 
 It works on **one problem bank at a time**: one problem, in one or more isomorphic
-versions, with a rubric per version. A rubric can be written by hand or drafted by
-AI; an AI draft is a proposal, and nothing in it is used until you accept it. The
+versions. By default the versions **share one rubric**, and a version can word an
+item its own way where it needs to; a bank whose versions came with different items
+keeps a rubric per version. A rubric can be written by hand, read from a rubric file,
+or drafted by AI; an AI draft is a proposal, and nothing in it is used until you
+accept it. The
 plan for the round that follows the MVP is in [GRADER_PLAN.md](GRADER_PLAN.md);
 this file describes what is built.
 
@@ -35,21 +38,30 @@ grader_kit/rubric_grader_handoff/data/instances.csv
 
 Each step shows one default action. Everything else is in a collapsed side box.
 
-1. **Problem**: upload a problem or problem bank as a Problem Info CSV. Side box:
-   the Chen & Wan example (one problem at a time, pick the rubric wording), problem
-   info and responses together (the responses are held until the rubric is
-   approved), pasting the CSV text, pasting unstructured material for the AI to
-   draft a bank from, and the saved problem banks (open, delete).
-2. **Rubric**: one panel per version, made of boxes: problem text, each item, each
-   weight, and each item's optional acceptable forms and "does not count"
-   exclusions. An upload is never rejected for what it lacks. Boxes that plain code
-   could fill (a missing problem id, item number or weight) are filled and marked
-   "filled in for you"; empty boxes that are needed are highlighted. **Approve &
-   lock** stays off until nothing needed is empty and no AI draft is waiting. A
-   locked rubric is read-only; "Edit rubric" unlocks it as a draft of the next
-   revision. Side box: copy a rubric to versions without one, add or remove a
-   version, download the rubric as a Problem Info CSV, the AI drafting tools (see
-   below), and the file details.
+1. **Problem**: choose one or more files: a Problem Info CSV or an explanations
+   export (the problem, in one or more versions), a rubric file, and with a Problem
+   Info CSV a responses file (held until the rubric is approved). Each file is
+   recognised before anything is loaded, and the screen says in a plain sentence
+   what each one is and what uploading will do; a file that does not fit is named
+   with the reason, and nothing is loaded from it. Side box: the Chen & Wan example
+   (one problem at a time, pick the rubric wording), pasting the CSV text, pasting
+   unstructured material for the AI to draft a bank from, and the saved problem
+   banks (open, delete).
+2. **Rubric**: made of boxes. On top, the rubric every version shares: each item,
+   its weight and its optional **specifications** (what counts, what also counts and
+   what does not count, one line each). Below it, each version's problem text and,
+   only where it needs one, the version's own wording of a shared item, which keeps
+   the shared item's weight. A bank whose versions came with different items shows
+   one rubric per version instead. An upload is never rejected for what it lacks.
+   Boxes that plain code could fill (a missing problem id, item number or weight)
+   are filled and marked "filled in for you"; empty boxes that are needed are
+   highlighted. **Approve & lock** stays off until nothing needed is empty and no AI
+   draft is waiting. A locked rubric is read-only; "Edit rubric" unlocks it as a
+   draft of the next revision. Side box: a rubric file (it becomes the shared
+   rubric; replacing a rubric asks first), "Use these items for every version" and
+   copying a rubric (banks with a rubric per version), adding or removing a version,
+   downloading the rubric as a Problem Info CSV, the AI drafting tools (see below),
+   and the file details.
 3. **Responses**: locked until the rubric is approved. Names you list are replaced
    with `[STUDENT]` **in the browser**, student ids are swapped for one-time ids
    (S001…), and only the id, version and response columns are uploaded. The id key
@@ -62,7 +74,8 @@ Each step shows one default action. Everything else is in a collapsed side box.
    are free and an interrupted run resumes.
 5. **Review & export**: a students × items grid per version. Amber outline = needs
    review (vote agreement below the slider, or a hard flag). Click a cell for every
-   vote, its reasoning and quotes, and press 1 / 0 to decide. Each run keeps a copy
+   vote, its reasoning and quotes, and the item with its specifications as the run
+   used it, and press 1 / 0 to decide. Each run keeps a copy
    of the rubric it used and says so when the rubric has been revised since. If the
    responses are replaced later, a run's grades are shown and exported only for
    responses that still have the same id and the same text. Side
@@ -78,24 +91,57 @@ The hard stops are enforced by the API, not only by the screen: no approval whil
 a needed box is empty or an AI draft is undecided, no responses before approval,
 no grading without both, and no grading of a response whose version is unknown.
 
+A version is graded with the shared items, its own wording in place of a shared
+item where it has one, so an item worded its own way is still one item: counts and
+the grid show it once. The grading prompt gets each item's statement followed by
+its specifications ("Specifications:" and one line each); an item without
+specifications is sent exactly as before, so its cached grades stay valid.
+
+### Dr. Chen's files
+
+- **Explanations export** (`ID, ItemID, ProblemBody, EarnedPoints, Explanation`):
+  split **in the browser**. Each ItemID is a version, with its ProblemBody as the
+  problem text. Each answer is cleaned first: Canvas HTML becomes plain text
+  (equation images become their LaTeX in `\( \)`, subscripts and superscripts become
+  `_{}` and `^{}`, paragraphs, line breaks and list items become line breaks, and
+  entities such as `&nbsp;` become characters). Text without real HTML is left
+  exactly as it is, so an answer such as "f < mg sin(theta)" is never damaged. Then
+  names are stripped and ids swapped as for any responses file. Only the id, the
+  ItemID and the cleaned answer are uploaded, and the answers are held until the
+  rubric is approved. EarnedPoints and any other column never leave the browser.
+- **Rubric file** (YAML: `judgment`, then `rubrics` with `id`, `item` and
+  `specifications`): becomes the rubric every version shares. It has no weights,
+  so each item is worth 1, marked "filled in for you". It can be chosen with the
+  problems on the Problem step or added on the Rubric step.
+- **Problem bank in YAML** (`bank_info`, `questions`): recognised and named, not
+  loaded yet. Reading it comes in the next update.
+
+A rubric or bank file uploaded as the problems is refused with a sentence saying
+what it is, instead of being read as a table.
+
 ### Rubric drafting by AI
 
-Three ways in, all on the Rubric step (the first also from the Problem step's side
-box). Each one produces a **draft**: it shows in the panel of its version, dashed
-and marked "AI draft", and is not part of the rubric until you accept it. The
-check, the rubric hash, runs and the CSV download never see a draft.
+Four ways in, all on the Rubric step (pasted material also from the Problem step's
+side box). Each one produces a **draft**: it shows where it would go, dashed and marked
+"AI draft", and is not part of the rubric until you accept it. The check, the rubric
+hash, runs and the CSV download never see a draft.
 
-- **From an example version.** When some versions have no rubric and one has, the
-  screen asks whether the AI should draft them from that one. Item numbers, weights
-  and the number of items are copied by code; the AI only adapts the wording.
-  "Generate based on v1" does the same for one version. For a version that already
-  has its own items, the AI only carries the example's acceptable forms and
-  exclusions over, and keeps your statements.
+- **Elaborate.** The AI suggests specifications for the items: other ways a
+  response can satisfy them, and near misses that do not count. For a shared rubric
+  it sees every version's problem text. It does not change your statements.
+- **A version's own wording.** Only for a version you name: the AI adapts the
+  shared items to that version's problem. Items it gives back word for word are
+  left out, and the version keeps the shared wording of them.
 - **From pasted material.** Paste a problem with its solution, grading notes or a
-  point scheme. The AI drafts the items and finds the problem text. Each item shows
-  the words of your material behind it. One version per paste.
-- **Elaborate my existing items.** For one version, the AI suggests acceptable forms
-  and things that do not count. It does not change your statements.
+  point scheme. The AI drafts the rubric every version shares (or, in a bank with a
+  rubric per version, the rubric of a version without one) and, for a version
+  without a problem text, finds the problem text. Each item shows the words of your
+  material behind it.
+- **From an example version** (banks with a rubric per version). When some versions
+  have no rubric and one has, the screen asks whether the AI should draft them from
+  that one. Item numbers, weights and the number of items are copied by code; the
+  AI only adapts the wording. For a version that already has its own items, the AI
+  only carries the example's specifications over, and keeps your statements.
 
 What is **inferred** is decided by code, not by the AI: an item counts as backed
 only when the words it quotes are found in what you pasted. Everything "elaborate"
@@ -104,8 +150,9 @@ items are accepted or discarded one by one; the rest can be accepted together.
 Accepted AI text keeps an "AI draft" mark until you change it.
 
 "Let the AI fill gaps" (side box, off by default): off, the AI drafts only when you
-press a button. Switching it on drafts every version that has no rubric, from a
-version that has one, or else from the problem text alone.
+press a button. Switching it on drafts an empty rubric: in a bank with a rubric per
+version, every version without one from a version that has one; otherwise the
+shared rubric from the problem texts alone.
 
 The drafting model is sent problem texts and rubric items only, never a student
 response. Pasted text is treated as data, not as instructions. It is kept on the
@@ -135,12 +182,18 @@ problem_id,problem_text,rubric_item_1,weight_1,rubric_item_2,weight_2
 ```
 
 `weight` may also be called `rubric_score`, `score` or `points`; `instructions` is
-optional. Two more optional columns carry an item's acceptable forms and its
-exclusions, one entry per line in the cell: `acceptable_forms` and
-`does_not_count` (`acceptable_forms_1` and so on in the wide shape). The download
-writes them only when an item has any. The MVP's rubric CSV (`problem_id,
+optional. An optional `specifications` column carries an item's specifications,
+one per line in the cell (`specifications_1` and so on in the wide shape). The
+download writes it only when an item has any. The two columns written before it,
+`acceptable_forms` and `does_not_count`, are still read, as specification lines
+starting "Also counts:" and "Does not count:". The MVP's rubric CSV (`problem_id,
 problem_text, item, criterion_text, points`) is still read. All versions in one
 file are versions of the same problem.
+
+Which rubric an upload makes: items given for one version only, or the same items
+for every version, become the rubric every version shares, and the Rubric step says
+so in a sentence. Versions whose items differ keep a rubric each. The download
+writes, for every version, the items it is graded with.
 
 Responses (text only):
 
@@ -154,7 +207,8 @@ has one version. Templates download from the Problem and Responses steps.
 
 Banks saved by the MVP (which held several problems each) still open: they can be
 viewed and exported, not edited or graded, and their runs show "rubric not
-recorded".
+recorded". Banks saved with the two lists (acceptable forms, does not count) load
+with them as specifications, and an unchanged rubric keeps its hash.
 
 ## Benchmark from the terminal
 
@@ -211,6 +265,11 @@ real, identifiable student work:
   material to the drafting model, and never a student response. The pasted material
   is stored with its bank until the rubric is approved or the bank is deleted. It is
   not checked for names, so do not paste student work.
+- An explanations export is split and cleaned in the browser; only ids (swapped),
+  versions and cleaned answers are uploaded. EarnedPoints is not uploaded and not
+  used until Dr. Chen says what it is for. His real files are never committed (the
+  repository is public); the test fixtures in `backend/tests/fixtures/chen_like/`
+  are made-up files with the same columns and markup.
 - Problem banks (problem text, rubric, responses), runs and cached model answers
   persist in `backend/app/data/grader/` until deleted. Nothing is purged
   automatically. What each delete call removes:
@@ -228,10 +287,10 @@ real, identifiable student work:
 
 ## Not built yet
 
-The settings panel (votes, test fraction, a model per task) and feedback
-generation: see the phases in [GRADER_PLAN.md](GRADER_PLAN.md). Also not built:
-drafting several versions from one paste, drafting from the terminal, whole-exam
-grading on
-top of problem banks, splitting criteria into AND/OR/NOT checks, automatic purge,
-per-teacher accounts, a separate Azure deployment, and file formats other than
-text CSV.
+Next (the second Phase 2b PR): reading Dr. Chen's bank YAML, and a Rubric step that
+stays usable with 20 to 36 versions. Later: the settings panel (votes, test
+fraction, a model per task) and feedback generation: see the phases in
+[GRADER_PLAN.md](GRADER_PLAN.md). Also not built: drafting from the terminal,
+whole-exam grading on top of problem banks, splitting criteria into AND/OR/NOT
+checks, automatic purge, per-teacher accounts, a separate Azure deployment, and
+file formats other than text CSV and the YAML files above.
