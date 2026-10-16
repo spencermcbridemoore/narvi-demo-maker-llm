@@ -7,6 +7,11 @@ data came from. Ids are opaque strings — never parse meaning out of them.
 An ``Assessment`` is one **problem bank**: one problem in one or more isomorphic
 versions. Its ``problems`` are the versions. Every field added after the MVP has a
 default, so files saved by the MVP still load (they come back as ``kind="legacy"``).
+
+A rubric item either belongs to one version or, with an empty ``problem_id``, is
+shared by every version (the default since Phase 2b). A version's own wording of a
+shared item is an item of that version with the same key. ``criteria_for`` gives
+what a version is graded with.
 """
 
 from __future__ import annotations
@@ -14,7 +19,18 @@ from __future__ import annotations
 import hashlib
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field, model_validator
+
+SHARED = ""     # the problem_id of a rubric item shared by every version
+# Phase 2 kept acceptable forms and exclusions in two lists. They load as one list of
+# specifications, each line saying which it was.
+ALSO_COUNTS = "Also counts: "
+DOES_NOT_COUNT = "Does not count: "
+
+
+def every_version(n: int) -> str:
+    """Every version, in a sentence: "both versions" or "all 20 versions"."""
+    return "both versions" if n == 2 else f"all {n} versions"
 
 
 def clean_text(text: str) -> str:
@@ -36,6 +52,23 @@ def text_fingerprint(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()[:16]
 
 
+def one_list(data):
+    """An item saved with Phase 2's two lists (``accept``, ``reject``) as one list of
+    specifications. A line the AI wrote stays marked as the AI's."""
+    if not isinstance(data, dict) or not {"accept", "reject"} & data.keys():
+        return data
+    data = dict(data)
+    accept = [str(a) for a in data.pop("accept", None) or []]
+    reject = [str(r) for r in data.pop("reject", None) or []]
+    if "specifications" not in data:
+        lines = [(ALSO_COUNTS + a, a) for a in accept] + [(DOES_NOT_COUNT + r, r) for r in reject]
+        data["specifications"] = [line for line, _ in lines]
+        if "ai_lines" in data:
+            written = set(data["ai_lines"] or [])
+            data["ai_lines"] = [line for line, old in lines if old in written]
+    return data
+
+
 class Problem(BaseModel):
     """One version of the bank's problem."""
 
@@ -47,19 +80,25 @@ class Problem(BaseModel):
 class Criterion(BaseModel):
     """One binary rubric item: the response earns it (1) or doesn't (0)."""
 
-    id: str                 # unique within the bank, e.g. "v1#1"
-    problem_id: str         # the version this item belongs to
-    key: str                # per-version key; instance ids are "<response_id>#<key>"
+    id: str                 # unique within the bank: "v1#1", or "*#1" for a shared item
+    problem_id: str         # the version this item belongs to; SHARED ("") = every version
+    key: str                # instance ids are "<response_id>#<key>"
     label: str              # display label, e.g. "Item 1"
     text: str = ""          # the statement the grader is told
     source_text: str = ""   # the teacher's original wording, kept for reference
     points: float = 1.0     # the weight; 0 means "not set yet"
-    accept: list[str] = Field(default_factory=list)   # acceptable forms
-    reject: list[str] = Field(default_factory=list)   # "does not count" exclusions
+    # What the item takes to earn, one line each: requirements, forms that also count,
+    # near misses that do not (Chen's "specifications").
+    specifications: list[str] = Field(default_factory=list)
     origin: str = "teacher"  # who wrote the statement: teacher | copied | ai | ai_inferred
-    # The accept and reject lines exactly as an accepted AI draft wrote them. A line
-    # stays marked as the AI's while it still reads the same.
+    # Specification lines exactly as an accepted AI draft wrote them. A line stays
+    # marked as the AI's while it still reads the same.
     ai_lines: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def two_lists_to_one(cls, data):
+        return one_list(data)
 
 
 class Response(BaseModel):
@@ -95,12 +134,16 @@ class ProposedItem(BaseModel):
     key: str                # from code, never from the model
     text: str = ""          # the drafted statement; "" when the item's own statement stays as it is
     points: float = 1.0     # from code: the example's weight, the item's own, or the material's (else 1)
-    accept: list[str] = Field(default_factory=list)
-    reject: list[str] = Field(default_factory=list)
+    specifications: list[str] = Field(default_factory=list)
     source_text: str = ""   # what it restates: the example item's wording, or words found in the pasted material
     inferred: bool = False  # nothing of the owner's backs it, so it is accepted on its own
     note: str = ""          # the AI's remark on this item
     base: str = ""          # fingerprint of the statement it was drafted for ("" = the item did not exist)
+
+    @model_validator(mode="before")
+    @classmethod
+    def two_lists_to_one(cls, data):
+        return one_list(data)
 
 
 class Proposal(BaseModel):
@@ -110,10 +153,11 @@ class Proposal(BaseModel):
 
     id: str
     mode: str                           # example | material | text | elaborate (see draft.py)
-    problem_id: str                     # the version it is for
-    example_id: str = ""                # the version it was adapted from (mode "example")
+    problem_id: str                     # where its items go: a version, or SHARED (the shared rubric)
+    example_id: str = ""                # mode "example": the version adapted from ("" = the shared rubric)
     version_text: str = ""              # a problem text taken from the pasted material, for a version without one
     version_text_found: bool = False    # ... and code found it word for word in that material
+    text_for: str = ""                  # the version that problem text is for ("" = problem_id)
     items: list[ProposedItem] = Field(default_factory=list)
     order: list[str] = Field(default_factory=list)     # every drafted key, in order, to place an accepted item
     notes: list[str] = Field(default_factory=list)     # the AI's own notes: where it filled in or was unsure
@@ -148,8 +192,35 @@ class Assessment(BaseModel):
     proposals: list[Proposal] = Field(default_factory=list)    # AI drafts waiting for the owner
     material: str = ""                      # pasted material a draft was made from; dropped at approval
 
-    def criteria_for(self, problem_id: str) -> list[Criterion]:
+    def shared_items(self) -> list[Criterion]:
+        """The rubric every version shares."""
+        return [c for c in self.criteria if c.problem_id == SHARED]
+
+    def own_items(self, problem_id: str) -> list[Criterion]:
+        """The items stored for one version (or, with SHARED, the shared ones)."""
         return [c for c in self.criteria if c.problem_id == problem_id]
+
+    def criteria_for(self, problem_id: str) -> list[Criterion]:
+        """What one version is graded with: the shared items, with the version's own
+        wording in place of a shared item where it has one, then any items of its own
+        that are not shared. A bank without shared items gives each version its own."""
+        own = self.own_items(problem_id)
+        shared = self.shared_items()
+        if not shared:
+            return own
+        mine = {c.key: c for c in own}
+        keys = {c.key for c in shared}
+        return [mine.get(c.key, c) for c in shared] + [c for c in own if c.key not in keys]
+
+    def item_count(self) -> int:
+        """How many rubric items the bank has. A version's own wording of a shared
+        item is that item, not another one."""
+        keys = {c.key for c in self.shared_items()}
+        return sum(1 for c in self.criteria if c.problem_id == SHARED or c.key not in keys)
+
+    def text_for(self, proposal: "Proposal") -> str:
+        """The version a drafted problem text is for."""
+        return proposal.text_for or proposal.problem_id
 
     def instances(
         self,

@@ -63,16 +63,13 @@ def _fill(template: str, **values: str) -> str:
 
 
 def criterion_text(criterion: Criterion) -> str:
-    """The rubric item as the grader is told it: the statement, then its acceptable
-    forms and its exclusions. With both lists empty this is the statement alone,
-    byte for byte what was sent before the lists existed, so cached samples stay valid."""
+    """The rubric item as the grader is told it: the statement, then its
+    specifications. Without specifications this is the statement alone, byte for
+    byte what was sent before they existed, so cached samples stay valid."""
     text = criterion.text.strip()
-    accept = [a.strip() for a in criterion.accept if a.strip()]
-    reject = [r.strip() for r in criterion.reject if r.strip()]
-    if accept:
-        text += "\n\nAcceptable forms:\n" + "\n".join(f"- {a}" for a in accept)
-    if reject:
-        text += "\n\nDoes not count:\n" + "\n".join(f"- {r}" for r in reject)
+    lines = [s.strip() for s in criterion.specifications if s.strip()]
+    if lines:
+        text += "\n\nSpecifications:\n" + "\n".join(f"- {s}" for s in lines)
     return text
 
 

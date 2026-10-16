@@ -1,0 +1,21 @@
+# A made-up rubric in the shape of Dr. Chen's rubric files (Phase 2b fixture).
+# Every item below is graded as credit or no credit.
+judgment: binary
+
+rubrics:
+  - id: 1
+    item: Uses Newton's second law along the incline
+    specifications:
+      - Writing the sum of the forces along the incline equal to m*a also counts, even if a term is wrong.
+      - Just naming Newton's second law does not count.
+
+  - id: 2
+    item: Includes the friction force in the equation along the incline
+    specifications:
+      - 'Written with or without "=" both count'
+      - It must contain some form of friction term, such as f, f_k or mu*N.
+
+  - id: 3
+    item: Finds the normal force from the forces perpendicular to the incline
+    specifications:
+      - An equivalent verbal description also counts.

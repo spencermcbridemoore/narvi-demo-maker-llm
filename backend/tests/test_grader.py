@@ -21,7 +21,7 @@ from app.grader import aggregate, grade, metrics, rubric, runner, store
 from app.grader.adapters import (
     NothingToLoad, kit_dir, load_chen, load_problem_info, parse_responses, problem_info_csv,
 )
-from app.grader.model import Cell, Criterion, Problem, Response, Sample, instance_id, text_fingerprint
+from app.grader.model import SHARED, Cell, Criterion, Problem, Response, Sample, instance_id, text_fingerprint
 
 API = "/grader/api"
 LEGACY = Path(__file__).parent / "fixtures" / "grader_legacy"
@@ -145,10 +145,11 @@ def test_problem_info_wide_shape():
         "v1,A ball is dropped.,Uses energy conservation,2,Includes both PE terms,1\n"
         "v2,A ball is launched.,,,,\n"
     )
+    # Items for one version only are the rubric every version shares (decision 15).
     assert [(c.id, c.text, c.points) for c in bank.criteria] == [
-        ("v1#1", "Uses energy conservation", 2.0), ("v1#2", "Includes both PE terms", 1.0)]
+        ("*#1", "Uses energy conservation", 2.0), ("*#2", "Includes both PE terms", 1.0)]
     assert [p.id for p in bank.problems] == ["v1", "v2"]
-    assert _codes(findings) == ["rubric_missing"]
+    assert _codes(findings) == ["rubric_shared"]
 
 
 def test_problem_info_reads_the_old_rubric_csv():
@@ -160,23 +161,28 @@ def test_problem_info_reads_the_old_rubric_csv():
     assert _codes(findings) == ["weight_filled"] * 3
 
 
-def test_partial_upload_fills_what_code_can_and_asks_for_the_rest():
+def test_partial_upload_fills_what_code_can_and_shares_the_one_rubric():
     bank, findings = load_problem_info(PARTIAL)
     assert [p.id for p in bank.problems] == ["v1", "v2"]
-    assert [(c.key, c.points) for c in bank.criteria_for("v1")] == [("1", 1.0), ("2", 1.0)]
-    assert bank.criteria_for("v2") == []
+    # The file gives items for v1 only, so they are the rubric of both versions.
+    assert [(c.key, c.points) for c in bank.shared_items()] == [("1", 1.0), ("2", 1.0)]
+    assert bank.own_items("v1") == bank.own_items("v2") == []
+    assert [c.id for c in bank.criteria_for("v2")] == ["*#1", "*#2"]
 
     filled = {f.code: f for f in findings if f.filled == "code"}
-    assert set(filled) == {"weight_filled", "version_id_filled"}
-    assert (filled["weight_filled"].box, filled["weight_filled"].item_key, filled["weight_filled"].value) == ("weight", "2", "1")
+    assert set(filled) == {"weight_filled", "version_id_filled", "rubric_shared"}
+    # The mark that the weight was filled in now sits on the shared item's box.
+    assert (filled["weight_filled"].box, filled["weight_filled"].problem_id, filled["weight_filled"].item_key,
+            filled["weight_filled"].value) == ("weight", SHARED, "2", "1")
     assert (filled["version_id_filled"].box, filled["version_id_filled"].problem_id, filled["version_id_filled"].row) == ("version_id", "v2", 4)
-    assert _codes(findings, "owner") == ["rubric_missing"]
+    assert filled["rubric_shared"].message == (
+        "The file gives rubric items for version v1 only, so they are the rubric of both versions.")
+    assert _codes(findings, "owner") == []
     # No row numbers or file jargon in the sentences themselves.
     assert not any(re.search(r"\brow \d|\bline \d|column \d", f.message) for f in findings if f.filled != "note")
 
     check = rubric.check(bank)
-    assert [(b["box"], b["problem_id"]) for b in check["to_fill"]] == [("items", "v2")]
-    assert (check["rubric_state"], check["without_rubric"], check["can_approve"]) == ("some", ["v2"], False)
+    assert (check["to_fill"], check["rubric_state"], check["without_rubric"], check["can_approve"]) == ([], "all", [], True)
 
 
 def test_missing_problem_ids_are_named_in_file_order():
@@ -189,7 +195,7 @@ def test_missing_problem_ids_are_named_in_file_order():
 def test_row_without_problem_id_joins_the_version_above():
     bank, findings = load_problem_info(
         "problem_id,problem_text,rubric_item,weight\nv1,Text,Item a,1\n,,Item b,1\n")
-    assert [c.id for c in bank.criteria] == ["v1#1", "v1#2"]
+    assert [c.id for c in bank.criteria] == ["*#1", "*#2"]      # one version: its rubric is the shared one
     joined = next(f for f in findings if f.code == "row_joined_version")
     assert (joined.filled, joined.box, joined.item_key) == ("code", "item", "2")
 
@@ -221,7 +227,7 @@ def test_weight_that_is_not_a_positive_number_is_kept_and_flagged(raw):
 
 def test_unrecognized_columns_are_read_in_order_and_said_so():
     bank, findings = load_problem_info("Aufgabe,Inhalt,Kriterium,Gewicht,Notiz\nv1,Text,Item a,3,x\n")
-    assert [(c.id, c.text, c.points) for c in bank.criteria] == [("v1#1", "Item a", 3.0)]
+    assert [(c.id, c.text, c.points) for c in bank.criteria] == [("*#1", "Item a", 3.0)]
     assumed = next(f for f in findings if f.code == "columns_assumed")
     assert assumed.filled == "code" and "problem id, problem text, rubric item, weight" in assumed.message
     assert '"Notiz"' in next(f for f in findings if f.code == "columns_ignored").message
@@ -230,7 +236,7 @@ def test_unrecognized_columns_are_read_in_order_and_said_so():
 
     # No header at all: the first row is data and is kept.
     bank, findings = load_problem_info("v1,A ball of mass m is dropped from a height h.,Item a,2\n")
-    assert [(c.id, c.points) for c in bank.criteria] == [("v1#1", 2.0)]
+    assert [(c.id, c.points) for c in bank.criteria] == [("*#1", 2.0)]
     assert "first row" in next(f for f in findings if f.code == "columns_assumed").message
 
 
@@ -345,7 +351,7 @@ def test_problem_info_csv_round_trips():
     assert [(c.id, c.text, c.points) for c in again.criteria] == [(c.id, c.text, c.points) for c in bank.criteria]
 
     # A weight is written in full, and one that is not set yet stays empty.
-    rubric.set_items(bank, "v1", [{"text": "Big", "points": 1234567.5}, {"text": "Unset", "points": None}])
+    rubric.set_items(bank, SHARED, [{"text": "Big", "points": 1234567.5}, {"text": "Unset", "points": None}])
     lines = problem_info_csv(bank).splitlines()
     assert lines[1].endswith(",Big,1234567.5") and lines[2].endswith(",Unset,")
 
@@ -420,17 +426,22 @@ def test_approval_is_refused_until_every_needed_box_is_filled():
     bank, _ = load_problem_info("problem_id,problem_text,rubric_item,weight\nv1,,Item a,0\nv1,,,1\nv2,Text,,\n")
     with pytest.raises(rubric.Refusal) as refused:
         rubric.approve(bank)
-    assert refused.value.kind == "incomplete" and "4 boxes are still empty" in refused.value.message
+    assert refused.value.kind == "incomplete" and "3 boxes are still empty" in refused.value.message
+    # The shared items' boxes once, then each version's.
     assert [(b["box"], b["problem_id"], b["item_key"]) for b in refused.value.boxes] == [
-        ("version_text", "v1", ""), ("weight", "v1", "1"), ("item_text", "v1", "2"), ("items", "v2", "")]
+        ("weight", SHARED, "1"), ("item_text", SHARED, "2"), ("version_text", "v1", "")]
     assert bank.rubric_status == "draft" and bank.rubric_revision == 0
 
     rubric.edit_version(bank, "v1", text="A problem")
-    rubric.set_items(bank, "v1", [{"key": "1", "text": "Item a", "points": 2}])
-    rubric.copy_items(bank, "v1")
+    rubric.set_items(bank, SHARED, [{"key": "1", "text": "Item a", "points": 2}])
     rubric.approve(bank)
     assert (bank.rubric_status, bank.rubric_revision, len(bank.rubric_hash)) == ("approved", 1, 16)
     assert bank.rubric_approved_at is not None
+
+    # Versions with rubrics of their own: one without any needs its items.
+    own, _ = load_problem_info("problem_id,problem_text,rubric_item\nA,One,Item a\nB,Two,Item b\n")
+    rubric.add_version(own, "C", text="Three")
+    assert [(b["box"], b["problem_id"]) for b in rubric.check(own)["to_fill"]] == [("items", "C")]
 
 
 def test_locked_rubric_refuses_edits_until_unlocked():
@@ -489,18 +500,22 @@ def test_hash_changes_on_any_edit_of_text_weight_or_items_and_not_otherwise():
 
 
 def test_copy_goes_only_to_versions_without_a_rubric_and_is_marked():
-    bank, _ = load_problem_info(PARTIAL)
+    # Versions whose items differ keep rubrics of their own; a third version has none.
+    bank, _ = load_problem_info(
+        "problem_id,problem_text,rubric_item\nv1,One,Uses energy conservation\nv1,,Includes both PE terms\n"
+        "v2,Two,Uses conservation of energy at launch\n")
+    assert bank.shared_items() == []
     rubric.add_version(bank, text="A third version")
-    assert rubric.copy_items(bank, "v1") == ["v2", "v3"]
+    assert rubric.copy_items(bank, "v1") == ["v3"]
     assert [(c.key, c.text, c.points, c.origin) for c in bank.criteria_for("v3")] == [
         ("1", "Uses energy conservation", 1.0, "copied"), ("2", "Includes both PE terms", 1.0, "copied")]
     assert rubric.copy_items(bank, "v1") == []          # every version has one now
     # Editing a copied item makes it the teacher's own; an untouched one stays "copied".
-    rubric.set_items(bank, "v2", [
+    rubric.set_items(bank, "v3", [
         {"key": "1", "text": "Uses conservation of energy at launch", "points": 1},
         {"key": "2", "text": "Includes both PE terms", "points": 1},
     ])
-    assert [c.origin for c in bank.criteria_for("v2")] == ["teacher", "copied"]
+    assert [c.origin for c in bank.criteria_for("v3")] == ["teacher", "copied"]
     with pytest.raises(rubric.Refusal):
         rubric.copy_items(bank, "nope")
 
@@ -546,7 +561,7 @@ def test_version_edits_carry_items_and_responses_along():
         rubric.remove_version(bank, "B")                     # a bank keeps at least one version
 
 
-def test_grader_is_told_the_statement_plus_the_lists_and_only_the_statement_when_they_are_empty():
+def test_grader_is_told_the_statement_plus_its_specifications_and_only_the_statement_without_any():
     problem = Problem(id="v1", text="Why does ice float?", instructions="Explain.")
     response = Response(id="s1", problem_id="v1", text="It is less dense.")
     plain = Criterion(id="v1#1", problem_id="v1", key="1", label="Item 1", text="  Mentions density\n")
@@ -558,9 +573,11 @@ def test_grader_is_told_the_statement_plus_the_lists_and_only_the_statement_when
     )
     assert grade.build_messages(problem, plain, response) == [("system", grade.SYSTEM_TEMPLATE), ("human", as_before)]
 
-    listed = plain.model_copy(update={"accept": ["mass per volume"], "reject": ["just 'lighter'", " "]})
+    listed = plain.model_copy(update={"specifications": [
+        "Writing mass per volume also counts.", " ", "Just saying 'lighter' does not count."]})
     assert grade.criterion_text(listed) == (
-        "Mentions density\n\nAcceptable forms:\n- mass per volume\n\nDoes not count:\n- just 'lighter'")
+        "Mentions density\n\nSpecifications:\n- Writing mass per volume also counts.\n"
+        "- Just saying 'lighter' does not count.")
     assert grade.criterion_text(listed) in grade.build_messages(problem, listed, response)[1][1]
 
 
@@ -645,8 +662,8 @@ def test_run_is_stamped_with_the_rubric_it_used(monkeypatch):
     assert [(v["id"], v["text"], [i["key"] for i in v["items"]]) for v in copy] == [
         ("A", "Why does ice float?", ["1", "2"]), ("B", "Why does wood float?", ["1", "2"])]
     assert copy[0]["items"][1] == {
-        "id": "A#2", "key": "2", "label": "Item 2", "points": 2.0, "origin": "teacher",
-        "text": "Explains that ice is less dense than liquid water", "accept": [], "reject": [],
+        "id": "A#2", "key": "2", "label": "Item 2", "points": 2.0, "origin": "teacher", "problem_id": "A",
+        "text": "Explains that ice is less dense than liquid water", "specifications": [],
     }
 
     # The copy belongs to the run: revising the bank afterwards does not touch it.
@@ -694,38 +711,47 @@ def test_run_refuses_to_start_until_grading_is_possible(monkeypatch):
 # --- API -----------------------------------------------------------------------------
 
 def test_api_flow_from_partial_upload_to_export(client):
-    bank = client.post(f"{API}/assessments/problem-info", json={"name": "Springs", "csv": PARTIAL}).json()
+    # v1 has the rubric (one weight missing); v2 has no problem text yet.
+    gap = ("problem_id,problem_text,rubric_item,weight\n"
+           "v1,A ball of mass m is dropped from height h.,Uses energy conservation,1\n"
+           "v1,,Includes both PE terms,\nv2,,,\n")
+    bank = client.post(f"{API}/assessments/problem-info", json={"name": "Springs", "csv": gap}).json()
     aid = bank["id"]
     assert (bank["kind"], bank["rubric_status"], bank["check"]["can_approve"]) == ("bank", "draft", False)
-    assert [f["code"] for f in bank["findings"] if f["filled"] == "code"] == ["version_id_filled", "weight_filled"]
+    assert [f["code"] for f in bank["findings"] if f["filled"] == "code"] == ["weight_filled", "rubric_shared"]
 
     # Hard stop: no approval while a needed box is empty. The refusal names the box.
     refused = client.post(f"{API}/assessments/{aid}/rubric/approve")
     assert refused.status_code == 422 and "1 box is still empty" in _message(refused)
     assert refused.json()["detail"]["boxes"] == [{
-        "box": "items", "problem_id": "v2", "item_key": "",
-        "message": "Version v2 needs at least one rubric item."}]
+        "box": "version_text", "problem_id": "v2", "item_key": "",
+        "message": "Version v2 needs its problem text."}]
     # Hard stop: no responses before approval.
     refused = client.post(f"{API}/assessments/{aid}/responses", json={"csv": "id,response\nx,y\n"})
     assert refused.status_code == 409 and _message(refused) == "Responses can be added once the rubric is approved."
-    assert refused.json()["detail"]["boxes"][0]["box"] == "items"
+    assert refused.json()["detail"]["boxes"][0]["box"] == "version_text"
     # Hard stop: no grading without an approved rubric and responses.
     refused = client.post(f"{API}/runs", json={"assessment_id": aid, "k": 1})
     assert refused.status_code == 409 and [b["step"] for b in refused.json()["detail"]["boxes"]] == ["rubric", "responses"]
 
-    # Finish the rubric by hand: copy v1's items to v2, then reword one of them.
-    copied = client.post(f"{API}/assessments/{aid}/rubric/copy", json={"problem_id": "v1"}).json()
-    assert copied["copied_to"] == ["v2"] and copied["check"]["can_approve"]
-    edited = client.put(f"{API}/assessments/{aid}/rubric", json={"problem_id": "v2", "items": [
-        {"key": "1", "text": "Uses energy conservation at launch", "points": 1},
+    # Finish by hand: v2's problem text; the shared item 2 is worth 2; v2 words item 1 its own way.
+    client.put(f"{API}/assessments/{aid}/version", json={"problem_id": "v2", "text": "A ball is launched upward with speed v."})
+    client.put(f"{API}/assessments/{aid}/rubric", json={"problem_id": "", "items": [
+        {"key": "1", "text": "Uses energy conservation", "points": 1},
         {"key": "2", "text": "Includes both PE terms", "points": 2},
+    ]})
+    edited = client.put(f"{API}/assessments/{aid}/rubric", json={"problem_id": "v2", "items": [
+        {"key": "1", "text": "Uses energy conservation at launch", "points": 5},
     ]}).json()
-    assert [(c["text"], c["points"], c["origin"]) for c in edited["criteria"] if c["problem_id"] == "v2"] == [
-        ("Uses energy conservation at launch", 1.0, "teacher"), ("Includes both PE terms", 2.0, "copied")]
+    # Its own wording keeps the shared item's weight.
+    assert [(c["problem_id"], c["key"], c["text"], c["points"]) for c in edited["criteria"]] == [
+        ("", "1", "Uses energy conservation", 1.0), ("", "2", "Includes both PE terms", 2.0),
+        ("v2", "1", "Uses energy conservation at launch", 1.0)]
+    assert edited["check"]["can_approve"]
 
     approved = client.post(f"{API}/assessments/{aid}/rubric/approve").json()
     assert (approved["rubric_status"], approved["rubric_revision"]) == ("approved", 1)
-    assert len(approved["rubric_hash"]) == 16 and len(approved["warnings"]) == 1   # weights differ: a warning
+    assert len(approved["rubric_hash"]) == 16 and approved["warnings"] == []      # the versions share the items
 
     # Locked: every edit is refused until "Edit rubric".
     for method, path, body in (
@@ -745,7 +771,7 @@ def test_api_flow_from_partial_upload_to_export(client):
     assert [r["problem_id"] for r in loaded["responses"]] == ["v1", "v2", "v2", "", ""]
     assert [f["code"] for f in loaded["findings"]] == ["response_version_unknown"]
     assert loaded["check"]["counts"] == {
-        "versions": 2, "items": 4, "responses": 5, "excluded": 0, "unknown_version": 2,
+        "versions": 2, "items": 2, "responses": 5, "excluded": 0, "unknown_version": 2,   # v2's own wording is item 1
         "per_version": {"v1": 1, "v2": 2}}
     # Hard stop: a response whose version is unknown cannot be graded.
     refused = client.post(f"{API}/runs", json={"assessment_id": aid, "k": 1})
@@ -764,6 +790,10 @@ def test_api_flow_from_partial_upload_to_export(client):
     assert run["status"] == "done" and len(run["cells"]) == 8      # 4 responses x 2 items
     assert (run["rubric_revision"], run["rubric_hash"]) == (1, approved["rubric_hash"])
     assert [v["id"] for v in run["rubric_copy"]["versions"]] == ["v1", "v2"]
+    # Each version is graded with the shared items, in its own wording where it has one.
+    assert [[(i["text"], i["points"]) for i in v["items"]] for v in run["rubric_copy"]["versions"]] == [
+        [("Uses energy conservation", 1.0), ("Includes both PE terms", 2.0)],
+        [("Uses energy conservation at launch", 1.0), ("Includes both PE terms", 2.0)]]
 
     iid = run["cells"][0]["instance_id"]
     cell = client.post(f"{API}/runs/{run['id']}/override", json={"instance_id": iid, "final": 0}).json()
@@ -780,7 +810,7 @@ def test_api_flow_from_partial_upload_to_export(client):
 
     listed = client.get(f"{API}/assessments").json()
     assert [(b["id"], b["name"], b["kind"], b["versions"], b["items"], b["responses"], b["runs"],
-             b["rubric_status"]) for b in listed] == [(aid, "Springs", "bank", 2, 4, 5, 1, "approved")]
+             b["rubric_status"]) for b in listed] == [(aid, "Springs", "bank", 2, 2, 5, 1, "approved")]
     assert [r["id"] for r in client.get(f"{API}/runs", params={"assessment_id": aid}).json()] == [run["id"]]
 
     # "Edit rubric" starts the next revision; the run keeps the rubric it used.

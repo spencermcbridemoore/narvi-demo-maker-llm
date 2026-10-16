@@ -259,6 +259,13 @@ summary { cursor: pointer; color: var(--muted); }
 .g-item-text { display: flex; flex-direction: column; gap: 4px; }
 .g-weight { display: flex; flex-direction: column; gap: 4px; font-size: 0.8rem; color: var(--muted); }
 .g-main .g-weight input { width: 100%; }
+p.g-weight { margin: 0; }
+/* The rubric every version shares. */
+.g-shared { border-left: 3px solid #0ea5e9; }
+/* Files chosen on the Problem step, each with what it was recognised as. */
+.g-files { list-style: none; margin: 6px 0; padding: 0; font-size: 0.85rem; }
+.g-files li { display: flex; align-items: baseline; gap: 10px; border-top: 1px solid var(--border); padding: 6px 0; }
+.g-files li span { flex: 1; color: var(--muted); }
 
 /* --- lists ------------------------------------------------------------------ */
 .g-details-list { margin: 6px 0; padding-left: 18px; font-size: 0.8rem; line-height: 1.45; color: #cbd5e1; }

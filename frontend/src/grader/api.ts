@@ -3,39 +3,41 @@ import { BACKEND_URL } from "../config";
 
 /** One version of the bank's problem. */
 export type Problem = { id: string; text: string; instructions: string };
+/** The problem_id of a rubric item that every version shares. */
+export const SHARED = "";
+
 export type Criterion = {
   id: string;
-  problem_id: string;
+  problem_id: string; // the version it belongs to; SHARED = every version
   key: string;
   label: string;
   text: string;
   source_text: string;
   points: number; // the weight; 0 = not set yet
-  accept: string[];
-  reject: string[];
+  specifications: string[];
   origin: string; // who wrote the statement: teacher | copied | ai | ai_inferred
-  ai_lines: string[]; // accept and reject lines exactly as an accepted AI draft wrote them
+  ai_lines: string[]; // specification lines exactly as an accepted AI draft wrote them
 };
 
 /** One rubric item as the AI drafted it. It is not part of the rubric until it is accepted. */
 export type ProposedItem = {
   key: string;
-  text: string; // "" = the item's own statement stays, and only the lists are drafted
+  text: string; // "" = the item's own statement stays, and only specifications are drafted
   points: number;
-  accept: string[];
-  reject: string[];
+  specifications: string[];
   source_text: string; // what it restates: the example item, or words found in the pasted material
   inferred: boolean; // nothing of the owner's backs it: accepted on its own
   note: string;
 };
-/** An AI draft for one version, waiting to be accepted or discarded. */
+/** An AI draft for the shared rubric or for one version, waiting to be accepted or discarded. */
 export type Proposal = {
   id: string;
   mode: "example" | "material" | "text" | "elaborate";
-  problem_id: string;
-  example_id: string;
+  problem_id: string; // where its items go: a version, or SHARED
+  example_id: string; // mode "example": the version adapted from; SHARED = the shared rubric
   version_text: string; // a problem text taken from the pasted material, for a version without one
   version_text_found: boolean; // ... and found in it word for word
+  text_for: string; // the version that problem text is for ("" = problem_id)
   items: ProposedItem[];
   notes: string[]; // the AI's own notes
   remarks: string[]; // what the grader noticed about the draft
@@ -52,15 +54,17 @@ export type Drafting = {
   started: number;
   failed: { problem_id: string; message: string; detail: string }[];
 };
-/** What the AI could draft for the bank as it is now (version ids). */
+/** What the AI could draft for the bank as it is now. SHARED in a list = the shared rubric. */
 export type AiOptions = {
-  example: string; // the version others are drafted from; "" when no version has items
-  from_example: string[]; // versions without a rubric that can be drafted from it
-  carry_over: string[]; // versions whose own items lack forms or exclusions the example has
-  elaborate: string[]; // versions whose own items can be elaborated
-  from_text: string[]; // versions without a rubric, with only their problem text to go on
-  from_material: string[]; // versions without a rubric: pasted material can be drafted into them
-  needs_text: string[]; // versions without a rubric and without a problem text
+  shared: boolean; // the versions share a rubric
+  own_wording: string[]; // shared rubric: versions it can draft their own wording for
+  example: string; // own rubrics: the version others are drafted from ("" when none)
+  from_example: string[]; // own rubrics: versions without a rubric that can be drafted from it
+  carry_over: string[]; // own rubrics: versions whose items lack specifications the example has
+  elaborate: string[]; // SHARED, or versions with items
+  from_text: string[]; // no rubric yet: SHARED, from the problem texts alone
+  from_material: string[]; // no rubric yet: SHARED; own rubrics: versions without one
+  needs_text: string[]; // versions without a problem text
 };
 export type DraftRequest = {
   mode: Proposal["mode"];
@@ -195,9 +199,11 @@ export type RubricItem = {
   label: string;
   text: string;
   points: number;
-  accept?: string[];
+  specifications?: string[];
+  accept?: string[]; // runs graded before Phase 2b kept two lists
   reject?: string[];
   origin?: string;
+  problem_id?: string; // SHARED: an item every version shares
 };
 export type RubricVersion = { id: string; text: string; instructions: string; items: RubricItem[] };
 export type RunSummary = {
@@ -323,7 +329,7 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 const send = (method: string, body: unknown = {}): RequestInit => ({ method, body: JSON.stringify(body) });
 const post = (body: unknown = {}) => send("POST", body);
 
-export type ItemInput = { key: string; text: string; points: number | null; accept: string[]; reject: string[] };
+export type ItemInput = { key: string; text: string; points: number | null; specifications: string[] };
 export type ResponsesPatch = {
   response_ids?: string[];
   version_label?: string;
@@ -340,8 +346,9 @@ export const api = {
   examples: () => call<Example[]>("/examples"),
 
   listBanks: () => call<BankSummary[]>("/assessments"),
-  uploadProblemInfo: (name: string, csv: string, responses_csv = "") =>
-    call<Bank>("/assessments/problem-info", post({ name, csv, responses_csv })),
+  /** A bank from a Problem Info CSV; answers given with it are held until approval; a rubric file is shared. */
+  uploadProblemInfo: (name: string, csv: string, responses_csv = "", rubric = "") =>
+    call<Bank>("/assessments/problem-info", post({ name, csv, responses_csv, rubric })),
   loadExample: (problem_id: string, wording: string) =>
     call<Bank>("/assessments/example", post({ problem_id, wording })),
   draftFromMaterial: (name: string, material: string) =>
@@ -361,6 +368,12 @@ export const api = {
     call<Bank>(`/assessments/${id}/rubric`, send("PUT", { problem_id, items })),
   copyRubric: (id: string, problem_id: string, to?: string[]) =>
     call<Bank & { copied_to: string[] }>(`/assessments/${id}/rubric/copy`, post({ problem_id, to })),
+  /** Make one version's items the rubric every version shares. */
+  shareRubric: (id: string, problem_id: string) =>
+    call<Bank & { sharing: string[] }>(`/assessments/${id}/rubric/share`, post({ problem_id })),
+  /** A rubric file (Chen's YAML) as the shared rubric; `replace` when the bank has items already. */
+  rubricFile: (id: string, text: string, replace = false) =>
+    call<Bank & { items: number }>(`/assessments/${id}/rubric/file`, post({ text, replace })),
   approve: (id: string) => call<Bank & { warnings: string[] }>(`/assessments/${id}/rubric/approve`, post()),
   unlock: (id: string) => call<Bank>(`/assessments/${id}/rubric/unlock`, post()),
 
@@ -397,6 +410,19 @@ export const api = {
   metrics: (rid: string) => call<Metrics>(`/runs/${rid}/metrics`),
   predictionsUrl: (rid: string) => `${BASE}/runs/${rid}/predictions.csv`,
 };
+
+/**
+ * What one version is graded with. Mirrors backend Assessment.criteria_for(): the
+ * shared items, with the version's own wording in place of a shared item where it has
+ * one, then its items that are not shared. Without shared items, the version's own.
+ */
+export function itemsFor(bank: Bank, problemId: string): Criterion[] {
+  const own = bank.criteria.filter((c) => c.problem_id === problemId);
+  const shared = bank.criteria.filter((c) => c.problem_id === SHARED);
+  if (!shared.length) return own;
+  const keys = new Set(shared.map((c) => c.key));
+  return [...shared.map((c) => own.find((o) => o.key === c.key) ?? c), ...own.filter((c) => !keys.has(c.key))];
+}
 
 export function needsReview(cell: CellCompact, threshold: number, hardFlags: string[]): boolean {
   if (cell.override !== null) return false;

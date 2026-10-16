@@ -1,0 +1,13 @@
+ID,ItemID,ProblemBody,EarnedPoints,Explanation
+x7Kp2Q,900101,"A crate of mass 12.50 kg slides down a ramp inclined at 28.40∘.
+The coefficient of kinetic friction is 0.31.
+Find the acceleration of the crate in m/s².",2.0,"<p>I used Newton's second law along the ramp.</p><p>F<sub>net</sub> = mg sin(&theta;) - f<sub>k</sub> = ma</p><p>with&nbsp;<img class=""equation_image"" title=""f_k=\mu_kN"" src=""/equation_images/f_k%253D%255Cmu_kN?scale=1"" alt=""LaTeX: f_k=\mu_kN"" data-equation-content=""f_k=\mu_kN"" data-ignore-a11y-check=""""></p>"
+b3Nw9L,900101,"A crate of mass 12.50 kg slides down a ramp inclined at 28.40∘.
+The coefficient of kinetic friction is 0.31.
+Find the acceleration of the crate in m/s².",0.0,"Friction is less than gravity's pull, so f < mg sin(theta) and it speeds up."
+Qe5Rt1,900102,"A sled of mass 31.20 kg is pulled down a snowy slope inclined at 19.75∘.
+The coefficient of kinetic friction is 0.12.
+Find the acceleration of the sled in m/s².",2.0,"<ol><li>Forces: weight, normal force and friction.</li><li>N = mg cos(&theta;)</li><li><span style=""color: #000000;"">a = g(sin&theta; - &mu;cos&theta;)</span></li></ol><p>Signed, <em>Jane Doe</em></p>"
+mT4vZ8,900102,"A sled of mass 31.20 kg is pulled down a snowy slope inclined at 19.75∘.
+The coefficient of kinetic friction is 0.12.
+Find the acceleration of the sled in m/s².",0.0,"<p>x<sup>2</sup> grows&nbsp;&amp; the sled speeds up<br>because <img class=""equation_image"" title=""a&gt;0"" src=""/equation_images/a%253E0?scale=1"" alt=""LaTeX: a&gt;0"" data-equation-content=""a&gt;0""></p>"

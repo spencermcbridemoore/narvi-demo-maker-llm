@@ -1,14 +1,12 @@
-Adapt a rubric from one version of a problem to another version of the same problem.
+Adapt a rubric to one version of a problem.
 
-The two versions test the same thing with a different surface: other objects, numbers, symbols or setup. For each example item, write the item that asks for the same thing in the target version. Change only what the difference between the two versions requires. Keep the meaning, the strictness and the level of detail.
+{{source}} The versions of a problem test the same thing with a different surface: other objects, numbers, symbols or setup. For each example item, write the item that asks for the same thing in the target version. Change only what the difference requires. Keep the meaning, the strictness and the level of detail.
 
 - Return one item for each example item, under that example item's item_key. Do not add, drop, merge or split items.
-- acceptable_forms and does_not_count: adapt the entries the example item has, in the same order. Add none of your own, and leave a list empty when the example item's list is empty.
+- specifications: adapt the lines the example item has, in the same order. Add none of your own, and leave the list empty when the example item has none.
 - note: leave it empty. Only if an example item has no real counterpart in the target version, return your closest adaptation and explain the difficulty in note, in one plain sentence.
 
-EXAMPLE VERSION
-{{example_problem}}
-{{example_instructions}}EXAMPLE RUBRIC
+{{example_problem}}EXAMPLE RUBRIC
 {{example_items}}
 
 TARGET VERSION

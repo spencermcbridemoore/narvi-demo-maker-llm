@@ -4,16 +4,20 @@
 // missing is asked for as boxes to fill, never reported as an error.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { api, type Bank, type BankSummary, type Example, type Health, type Run, type RunSummary } from "./api";
+import { api, itemsFor, type Bank, type BankSummary, type Example, type Health, type Run, type RunSummary } from "./api";
 import {
   describePrepared,
   download,
+  choose,
   NO_FILE,
+  planFor,
+  prepareExplanations,
   prepareResponses,
   readTextFile,
   TEMPLATE_PROBLEM_INFO,
+  type Chosen,
+  type Plan,
   type Prepared,
-  type TextFile,
 } from "./csv";
 import {
   ConfirmButton,
@@ -220,7 +224,7 @@ export default function GraderApp() {
         ))}
         {bank && (
           <span className="g-current">
-            {bank.name} · {plural(bank.problems.length, unitWord(isLegacy(bank)))} · {plural(bank.criteria.length, "item")} ·{" "}
+            {bank.name} · {plural(bank.problems.length, unitWord(isLegacy(bank)))} · {plural(bank.check.counts.items, "item")} ·{" "}
             {plural(bank.responses.length, "response")} · {statusText(bank)}
           </span>
         )}
@@ -299,13 +303,31 @@ export default function GraderApp() {
 
 // --- 1. Problem --------------------------------------------------------------
 
-/** Read the chosen file, then clear the input so that choosing the same file again (after editing it) works. */
-const readFile = (input: HTMLInputElement, set: (v: TextFile) => void) => {
-  const file = input.files?.[0];
-  if (file) readTextFile(file).then(set);
-  input.value = "";
-};
-const chosen = (f: TextFile) => (f.name ? <span className="g-hint">{f.name}</span> : null);
+/** Names to strip and one-time ids: asked for wherever answers are uploaded. */
+function AnswerPrivacy({
+  roster,
+  pseudonymize,
+  onRoster,
+  onPseudonymize,
+}: {
+  roster: string;
+  pseudonymize: boolean;
+  onRoster: (v: string) => void;
+  onPseudonymize: (v: boolean) => void;
+}) {
+  return (
+    <>
+      <label className="g-field">
+        Names to strip from the answers, one per line
+        <textarea rows={2} value={roster} onChange={(e) => onRoster(e.target.value)} placeholder={"Jane Doe\nAli Khan"} />
+      </label>
+      <label className="g-check">
+        <input type="checkbox" checked={pseudonymize} onChange={(e) => onPseudonymize(e.target.checked)} />
+        Replace student ids with one-time ids (the key stays in this tab)
+      </label>
+    </>
+  );
+}
 
 function ProblemStep({
   examples,
@@ -326,15 +348,13 @@ function ProblemStep({
 }) {
   const [busy, setBusy] = useState(false);
   const [name, setName] = useState("");
-  const [info, setInfo] = useState<TextFile>(NO_FILE);
+  const [files, setFiles] = useState<Chosen[]>([]);
+  const [roster, setRoster] = useState("");
+  const [pseudonymize, setPseudonymize] = useState(true);
   // Other ways to start
   const chen = examples.find((e) => e.id === "chen");
   const [problem, setProblem] = useState("Q2");
   const [wording, setWording] = useState("simple");
-  const [bothInfo, setBothInfo] = useState<TextFile>(NO_FILE);
-  const [bothResponses, setBothResponses] = useState<TextFile>(NO_FILE);
-  const [roster, setRoster] = useState("");
-  const [pseudonymize, setPseudonymize] = useState(true);
   const [pastedInfo, setPastedInfo] = useState("");
   const [pastedResponses, setPastedResponses] = useState("");
   const [material, setMaterial] = useState("");
@@ -356,24 +376,60 @@ function ProblemStep({
     }
   };
 
-  /** Create a bank from Problem Info CSV text; responses given with it are held until approval. */
-  const create = (info: TextFile, responses: TextFile = NO_FILE) =>
+  /** Read the chosen files and say what each one is. A file chosen again replaces the earlier one. */
+  const addFiles = async (input: HTMLInputElement) => {
+    const list = Array.from(input.files ?? []);
+    input.value = ""; // so that choosing the same file again, after editing it, works
+    const read = (await Promise.all(list.map(readTextFile))).map(choose);
+    setFiles((fs) => [...fs.filter((f) => !read.some((r) => r.name === f.name)), ...read]);
+  };
+  const plan = planFor(files);
+
+  /**
+   * Create a bank from what a plan loads. Answers are cleaned, their names stripped
+   * and their ids swapped here, in the browser, before they are sent; they are held
+   * until the rubric is approved.
+   */
+  const load = (plan: Plan) =>
     guard(async () => {
-      // Names are stripped and ids swapped here, in the browser, before the responses are sent.
-      const prepared: Prepared | null = responses.text.trim()
-        ? prepareResponses(responses.text, roster.split("\n"), pseudonymize)
-        : null;
-      const bankName = name.trim() || info.name.replace(/\.[^.]+$/, "");
-      const bank = await api.uploadProblemInfo(bankName, info.text, prepared?.csv ?? "");
+      const { problems, rubric, answers } = plan;
+      if (!plan.ready || !problems) {
+        onError(plan.say);
+        return;
+      }
+      const names = roster.split("\n");
+      const bankName = name.trim() || problems.name.replace(/\.[^.]+$/, "");
+      let bank: Bank;
+      let prepared: Prepared | null = null;
+      if (problems.kind === "explanations") {
+        const split = prepareExplanations(problems.text, names, pseudonymize);
+        prepared = split;
+        bank = await api.uploadProblemInfo(bankName, split.versionsCsv, split.csv, rubric?.text ?? "");
+      } else {
+        prepared = answers?.text.trim() ? prepareResponses(answers.text, names, pseudonymize) : null;
+        bank = await api.uploadProblemInfo(bankName, problems.text, prepared?.csv ?? "", rubric?.text ?? "");
+      }
       const notes = [
         prepared
           ? `${plural(bank.held_responses, "response is", "responses are")} held until the rubric is approved. ${describePrepared(prepared)}`
           : "",
-        info.note,
-        responses.note,
+        ...plan.unused,
+        problems.note,
+        rubric?.note ?? "",
+        answers?.note ?? "",
       ].filter(Boolean);
       onCreated(bank, prepared?.idMap ?? {}, notes.length ? notes.join(" ") : null);
+      setFiles([]);
     });
+  const pasted = () =>
+    load(
+      planFor([
+        choose({ ...NO_FILE, text: pastedInfo }),
+        ...(pastedResponses.trim()
+          ? [{ ...NO_FILE, name: "the pasted responses", text: pastedResponses, kind: "responses" as const, sentence: "" }]
+          : []),
+      ]),
+    );
 
   const side = (
     <SideBox title="Other ways to start">
@@ -417,36 +473,6 @@ function ProblemStep({
         <p className="g-hint">The Chen &amp; Wan example isn't installed on this server.</p>
       )}
 
-      <h4>Problem info and responses together</h4>
-      <p className="g-hint">The responses are held, untouched, until the rubric is approved.</p>
-      <label className="g-field">
-        Problem Info CSV
-        <input type="file" accept=".csv,.tsv,.txt,text/csv" onChange={(e) => readFile(e.target, setBothInfo)} />
-        {chosen(bothInfo)}
-      </label>
-      <label className="g-field">
-        Responses CSV
-        <input type="file" accept=".csv,.tsv,.txt,text/csv" onChange={(e) => readFile(e.target, setBothResponses)} />
-        {chosen(bothResponses)}
-      </label>
-      <label className="g-field">
-        Names to strip from the responses, one per line
-        <textarea rows={2} value={roster} onChange={(e) => setRoster(e.target.value)} placeholder={"Jane Doe\nAli Khan"} />
-      </label>
-      <label className="g-check">
-        <input type="checkbox" checked={pseudonymize} onChange={(e) => setPseudonymize(e.target.checked)} />
-        Replace student ids with one-time ids (the key stays in this tab)
-      </label>
-      <div className="g-row">
-        <button
-          className="g-ghost small"
-          disabled={busy || !bothInfo.text || !bothResponses.text}
-          onClick={() => create(bothInfo, bothResponses)}
-        >
-          Upload both
-        </button>
-      </div>
-
       <h4>Paste the CSV text instead</h4>
       <textarea
         className="g-paste"
@@ -464,12 +490,11 @@ function ProblemStep({
         placeholder={"Optional: responses to hold until approval\nstudent_id,problem_id,response_text\n…"}
         aria-label="Responses CSV text (optional)"
       />
+      {pastedResponses.trim() && (
+        <AnswerPrivacy roster={roster} pseudonymize={pseudonymize} onRoster={setRoster} onPseudonymize={setPseudonymize} />
+      )}
       <div className="g-row">
-        <button
-          className="g-ghost small"
-          disabled={busy || !pastedInfo.trim()}
-          onClick={() => create({ ...NO_FILE, text: pastedInfo }, { ...NO_FILE, text: pastedResponses })}
-        >
+        <button className="g-ghost small" disabled={busy || !pastedInfo.trim()} onClick={pasted}>
           Use the pasted text
         </button>
       </div>
@@ -575,20 +600,51 @@ function ProblemStep({
       <section className="g-card">
         <h2>Upload a problem or problem bank</h2>
         <p className="g-muted">
-          A Problem Info CSV describes one problem: its text, in one or more versions, and its rubric items if you have
-          them. Whatever is missing can be filled in on the next step.
+          Choose the files you have: a Problem Info CSV or an explanations export with the problem in one or more
+          versions, and a rubric file if you have one. Each file is recognised before anything is loaded. Whatever is
+          missing can be filled in on the next step.
         </p>
         <label className="g-field">
           Name
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="For example: Spring launch problem" />
         </label>
         <label className="g-field">
-          Problem Info CSV <span className="g-hint">problem_id, problem_text, rubric_item, weight</span>
-          <input type="file" accept=".csv,.tsv,.txt,text/csv" onChange={(e) => readFile(e.target, setInfo)} />
-          {chosen(info)}
+          Files <span className="g-hint">Problem Info CSV, explanations export, rubric (YAML), responses</span>
+          <input
+            type="file"
+            multiple
+            accept=".csv,.tsv,.txt,.yaml,.yml,text/csv"
+            onChange={(e) => void addFiles(e.target)}
+          />
         </label>
+        {files.length > 0 && (
+          <ul className="g-files">
+            {files.map((f) => (
+              <li key={f.name}>
+                <strong>{f.name}</strong>
+                <span>{f.sentence}</span>
+                <button
+                  className="g-ghost small"
+                  aria-label={`Remove ${f.name}`}
+                  onClick={() => setFiles((fs) => fs.filter((x) => x.name !== f.name))}
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {plan.say && <p className={plan.ready ? "g-muted" : "g-callout"}>{plan.say}</p>}
+        {plan.unused.map((u) => (
+          <p className="g-hint" key={u}>
+            {u}
+          </p>
+        ))}
+        {(plan.problems?.kind === "explanations" || plan.answers) && (
+          <AnswerPrivacy roster={roster} pseudonymize={pseudonymize} onRoster={setRoster} onPseudonymize={setPseudonymize} />
+        )}
         <div className="g-row">
-          <button className="g-primary" disabled={busy || !info.text} onClick={() => create(info)}>
+          <button className="g-primary" disabled={busy || !plan.ready} onClick={() => load(plan)}>
             Upload
           </button>
           <button className="g-link-button" onClick={() => download("problem_info_template.csv", TEMPLATE_PROBLEM_INFO)}>
@@ -643,7 +699,7 @@ function GradeStep({
     for (const p of bank.problems) {
       const n = Math.min(cap, bank.responses.filter((r) => r.problem_id === p.id && !r.excluded).length);
       responses += n;
-      pairs += n * bank.criteria.filter((c) => c.problem_id === p.id).length;
+      pairs += n * itemsFor(bank, p.id).length;
     }
     return { responses, pairs };
   }, [bank, maxResponses]);
