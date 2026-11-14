@@ -230,6 +230,37 @@ using the kit's own `tools/evaluate.py`. It writes `predictions.csv` under
 milestone-0 check: re-scoring Chen's predictions through our pipeline reproduces
 `baselines.json` exactly.
 
+## Grade export folders from the terminal
+
+For written-response exports in the Canvas format (one folder per question: an
+explanations CSV with `ID, ItemID, ProblemBody, Explanation`, optionally
+`Problem_figure`, `EarnedPoints` and human grades `rubric_1..N`; a rubric YAML; optional
+figures). Point it at a question folder or a whole package:
+
+```
+cd backend
+../.venv/Scripts/python -m app.grader.batch "<package or question folder>" --estimate
+../.venv/Scripts/python -m app.grader.batch "<question folder>" --rows graded --sample 20
+../.venv/Scripts/python -m app.grader.batch "<package folder>"
+```
+
+- Files are found by content (the CSV's columns, the YAML's `rubrics:`), never by name.
+  Any number of items; figures and human grades are optional.
+- Answers are prepared by the web app's own code
+  (`frontend/scripts/prepare_explanations.mjs`, Node 22.6+): HTML to text, equation
+  images to their LaTeX. An Explanation of `NA` gets 0 on every item with no model call.
+- Same runner, sample cache and vote counting as the app; the rubric is graded as written.
+  A specification written as an outline (sub-points indented under a line) keeps its
+  sub-points on their own lines.
+- Figures are told to the grader as written descriptions: a `.txt` next to the image, or
+  an approved entry in the run folder's `figure_descriptions.yaml`. `--describe-figures`
+  drafts them with the strong model for you to approve; `--figures text` grades without.
+- Output (git-ignored) under `scratch/grading-runs/<package>/<question>/`: the export
+  with AI grades in `rubric_1..N`, a details CSV (confidence, votes, flags, human grade;
+  no answer text), a reasons CSV (the model's reasons and quotes), and `report.md` /
+  `report.json` with agreement and kappa per item, which way it disagrees, tokens, cost
+  and time. The grader's runs and cache go to `scratch/grading-runs/.grader`.
+
 ## Deploy (alongside DemoBuilder, same instance)
 
 The grader ships with the normal DemoBuilder deploy. It is **closed by default**:
