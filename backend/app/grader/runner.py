@@ -22,7 +22,7 @@ from typing import Callable, Literal
 from pydantic import BaseModel, Field
 
 from . import rubric, store
-from .aggregate import addresses_grader, quotes_found, resolve
+from .aggregate import addresses_grader, is_no_answer, quotes_found, resolve
 from .grade import PROMPT_VERSION, build_messages, grade_once, model_name
 from .model import Assessment, Cell, Sample, instance_id, text_fingerprint
 
@@ -81,10 +81,11 @@ def new_run(assessment: Assessment, config: RunConfig) -> Run:
     pairs = assessment.instances(config.problem_ids, config.max_responses)
     if not pairs:
         raise rubric.Refusal("There is nothing to grade with these settings.", kind="not_ready")
+    answered = [(resp, crit) for resp, crit in pairs if not is_no_answer(resp.text)]
     run = Run(
         id=uuid.uuid4().hex[:12], assessment_id=assessment.id, config=config,
         model=model_name(), prompt_version=PROMPT_VERSION, started=time.time(),
-        total_calls=len(pairs) * config.k,
+        total_calls=len(answered) * config.k,
         rubric_hash=assessment.rubric_hash, rubric_revision=assessment.rubric_revision,
         rubric_copy=rubric.rubric_copy(assessment),
         response_fingerprints={resp.id: text_fingerprint(resp.text) for resp, _ in pairs},
@@ -92,6 +93,8 @@ def new_run(assessment: Assessment, config: RunConfig) -> Run:
     for resp, crit in pairs:
         iid = instance_id(resp, crit)
         run.cells[iid] = Cell(instance_id=iid, response_id=resp.id, criterion_id=crit.id)
+        if is_no_answer(resp.text):     # decided now: 0, no model call
+            resolve(run.cells[iid], no_answer=True)
     _RUNS[run.id] = run
     persist(run)
     return run
@@ -209,7 +212,8 @@ async def execute(run: Run, assessment: Assessment,
                 last_save = time.time()
 
     try:
-        await asyncio.gather(*(one(c, i) for c in run.cells.values() for i in range(cfg.k)))
+        await asyncio.gather(*(one(c, i) for c in run.cells.values() for i in range(cfg.k)
+                               if "no_answer" not in c.flags))
         if run.status == "running":
             run.status = "done"
     except Exception as exc:  # unexpected bug, not a model error (those become samples)
@@ -243,6 +247,6 @@ def set_override(run_id: str, iid: str, final: int | None) -> Cell:
     cell.override = final
     # The flag was set from the response as it was graded; keep it rather than
     # re-reading a bank whose responses may have been replaced since.
-    resolve(cell, "addresses_grader" in cell.flags)
+    resolve(cell, "addresses_grader" in cell.flags, no_answer="no_answer" in cell.flags)
     persist(run)
     return cell

@@ -26,7 +26,7 @@ from pathlib import Path
 import yaml
 
 from ..config import REPO_ROOT
-from . import rubric
+from . import aggregate, rubric
 from .model import (ALSO_COUNTS, DOES_NOT_COUNT, SHARED, Assessment, Criterion, Finding, Problem, Response,
                     every_version)
 
@@ -1028,7 +1028,7 @@ def parse_responses(csv_text: str, bank: Assessment) -> tuple[list[Response], li
             problem_id = next((p.id for p in versions if rubric.norm_id(p.id) == wanted), "")
             if not problem_id:
                 unknown[label] = unknown.get(label, 0) + 1
-        if not text.strip():
+        if aggregate.is_no_answer(text):
             empty += 1
         responses.append(Response(
             id=rid, problem_id=problem_id, text=text, external_id=sid or rid, version_label=label,
@@ -1060,8 +1060,8 @@ def parse_responses(csv_text: str, bank: Assessment) -> tuple[list[Response], li
              "in file order.", "code", "student_id")
     if empty:
         note("responses_empty",
-             f"{empty} {'response is' if empty == 1 else 'responses are'} empty. "
-             "Empty responses are still graded, as empty answers.")
+             f"{empty} {'response is' if empty == 1 else 'responses are'} empty or say NA (no answer). "
+             f"{'It gets' if empty == 1 else 'They get'} 0 on every item, without asking the model.")
     if cols.leftovers(rows):
         note("columns_ignored", cols.leftovers(rows))
     return responses, found

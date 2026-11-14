@@ -5,7 +5,17 @@ import { describe, expect, it } from "vitest";
 
 import explanations from "../../../backend/tests/fixtures/chen_like/explanations.csv?raw";
 import rubricFile from "../../../backend/tests/fixtures/chen_like/rubric.yaml?raw";
-import { choose, htmlToText, looksLikeHtml, NO_FILE, parseTable, planFor, prepareExplanations, recognize } from "./csv";
+import {
+  choose,
+  gradedExport,
+  htmlToText,
+  looksLikeHtml,
+  NO_FILE,
+  parseTable,
+  planFor,
+  prepareExplanations,
+  recognize,
+} from "./csv";
 
 describe("htmlToText", () => {
   it("leaves plain text exactly as it is, even with < and > in it", () => {
@@ -126,5 +136,53 @@ describe("prepareExplanations", () => {
         'Not uploaded, and never left your browser: "EarnedPoints".',
       ]),
     );
+  });
+});
+
+describe("gradedExport", () => {
+  const versions = new Map([
+    ["S001", "900101"],
+    ["S002", "900101"],
+    ["S003", "900102"],
+  ]);
+  const grades = new Map<string, number | null>([
+    ["S001#1", 1],
+    ["S001#2", 0],
+    ["S002#1", 0],
+    ["S002#2", 0],
+    ["S003#1", 1],
+    ["S003#2", null], // a run that stopped early: no grade yet
+  ]);
+
+  it("writes the grades into the export's own rows, by the one-time ids worked out again in the browser", () => {
+    const out = gradedExport(explanations, grades, ["1", "2"], versions);
+    const rows = parseTable(out.csv).rows;
+    const source = parseTable(explanations).rows;
+    expect(rows[0]).toEqual([...source[0], "rubric_1", "rubric_2"]);
+    expect(out.added).toEqual(["rubric_1", "rubric_2"]);
+    expect(rows.length).toBe(source.length);
+    expect(rows.slice(1).map((r) => [r[0], r[5], r[6]])).toEqual([
+      ["x7Kp2Q", "1", "0"],
+      ["b3Nw9L", "0", "0"],
+      ["Qe5Rt1", "1", ""],
+      ["mT4vZ8", "", ""], // not in the run
+    ]);
+    expect(rows[1].slice(0, 5)).toEqual(source[1]); // the export's own cells are untouched
+    expect(out.matched).toBe(3);
+  });
+
+  it("fills existing rubric_N columns, and works for a bank uploaded with the ids as they were", () => {
+    const withGrades = explanations.replace("ID,ItemID,ProblemBody,EarnedPoints,Explanation", "ID,ItemID,ProblemBody,EarnedPoints,Explanation,rubric_1");
+    const plain = new Map([["x7Kp2Q", "900101"]]);
+    const out = gradedExport(withGrades, new Map([["x7Kp2Q#1", 1]]), ["1"], plain);
+    const rows = parseTable(out.csv).rows;
+    expect(rows[0][5]).toBe("rubric_1");
+    expect(out.added).toEqual([]);
+    expect(rows[1][5]).toBe("1");
+  });
+
+  it("refuses a file that is not this bank's export", () => {
+    expect(() => gradedExport("a,b\n1,2\n", grades, ["1"], versions)).toThrow(/not an explanations export/);
+    expect(() => gradedExport(explanations, grades, ["1"], new Map([["S001", "nope"]]))).toThrow(/lines up/);
   });
 });

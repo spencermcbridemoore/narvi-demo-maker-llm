@@ -651,6 +651,26 @@ def test_run_end_to_end_with_cache(monkeypatch):
     assert again.cached_calls == 18 and len(calls) == 18  # nothing re-sent to the model
 
 
+def test_no_answer_gets_zero_without_a_model_call(monkeypatch):
+    calls: list = []
+    _fake_model(monkeypatch, calls)
+    bank = _approved_bank(responses_csv='student,version,answer\ns1,A,"Ice is less dense."\ns2,A,NA\ns3,B,"  "\n')
+    _, found = parse_responses('student,version,answer\ns1,A,"x"\ns2,A,NA\ns3,B,""\n', bank)
+    assert "2 responses are empty or say NA" in next(f.message for f in found if f.code == "responses_empty")
+    run = runner.new_run(bank, runner.RunConfig(k=3, concurrency=2))
+    assert run.total_calls == 6                       # s1 only: 2 items x 3 votes
+    asyncio.run(runner.execute(run, bank))
+    assert run.status == "done" and run.done_calls == 6 and len(calls) == 6
+    for iid in ("s2#1", "s2#2", "s3#1", "s3#2"):
+        c = run.cells[iid]
+        assert (c.final, c.resolved_by, c.flags, c.samples) == (0, "no_answer", ["no_answer"], [])
+        assert not aggregate.needs_review(c, threshold=0.99)
+    # A teacher can still decide otherwise, and taking the decision back restores the rule.
+    assert runner.set_override(run.id, "s2#1", 1).final == 1
+    back = runner.set_override(run.id, "s2#1", None)
+    assert (back.final, back.resolved_by, back.flags) == (0, "no_answer", ["no_answer"])
+
+
 def test_run_is_stamped_with_the_rubric_it_used(monkeypatch):
     _fake_model(monkeypatch)
     bank = _approved_bank()

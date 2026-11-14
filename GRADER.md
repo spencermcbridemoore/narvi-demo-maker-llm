@@ -71,14 +71,21 @@ Each step shows one default action. Everything else is in a collapsed side box.
 4. **Grade**: starts only with an approved rubric, responses, and a version for
    every response that is not left out. Side box: votes per item (k), reasoning
    effort, parallel calls, max responses. Identical calls are cached, so re-runs
-   are free and an interrupted run resumes.
+   are free and an interrupted run resumes. A response with no answer (empty, or
+   the export's `NA`) gets 0 on every item without a model call (flag `no_answer`,
+   decided by `no_answer`; a teacher can still override it).
 5. **Review & export**: a students × items grid per version. Amber outline = needs
    review (vote agreement below the slider, or a hard flag). Click a cell for every
    vote, its reasoning and quotes, and the item with its specifications as the run
    used it, and press 1 / 0 to decide. Each run keeps a copy
    of the rubric it used and says so when the rubric has been revised since. If the
    responses are replaced later, a run's grades are shown and exported only for
-   responses that still have the same id and the same text. Side
+   responses that still have the same id and the same text. A response is listed
+   under the version it answered (with a shared rubric, its own version). **Export
+   into <the export>** writes the grades into the explanations export's own
+   `rubric_1..N` columns (added when missing), every row as in the file, with the
+   original ids: the file is read again in the browser (or chosen again after a
+   reload) and never uploaded. Side
    box: the comparison with the human graders (example data only; red dashes = both
    humans disagree with the final grade), the detail and `predictions.csv` exports,
    and deleting the bank's data.
