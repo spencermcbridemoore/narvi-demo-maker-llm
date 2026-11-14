@@ -42,9 +42,44 @@
 
 .g-main { padding: 18px 22px 40px; }
 .g-stack { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
-/* A step: its default action on the left, its collapsed side box on the right. */
-.g-two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 370px); gap: 14px; align-items: start; }
-@media (max-width: 1000px) { .g-two { grid-template-columns: minmax(0, 1fr); } }
+/* A step with a navigation column: sections listed on the left, the step on the right. */
+.g-with-nav { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 18px; align-items: start; }
+.g-nav {
+  position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto;
+  padding: 4px 4px 12px 0; font-size: 0.84rem;
+}
+.g-nav-group + .g-nav-group { margin-top: 14px; }
+.g-nav-title {
+  margin: 0 0 4px 8px; font-size: 0.72rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--muted);
+}
+.g-nav-count { font-weight: 400; letter-spacing: 0; text-transform: none; }
+.g-nav ul { list-style: none; margin: 0; padding: 0; }
+.g-nav li button {
+  display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; font: inherit;
+  padding: 4px 8px; color: var(--muted); background: transparent; border: 0;
+  border-left: 2px solid transparent; border-radius: 0 6px 6px 0; cursor: pointer;
+}
+.g-nav li button:hover { color: var(--text); background: var(--panel); }
+.g-nav li button.current { color: var(--text); border-left-color: var(--accent); background: var(--accent-soft); }
+.g-nav-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.g-nav-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; margin-left: auto; }
+.g-nav-dot.needed { background: #f59e0b; }
+.g-nav-dot.own { background: transparent; border: 1px solid var(--muted); }
+.g-nav-none { padding: 4px 8px; color: var(--muted); font-size: 0.78rem; }
+.g-main .g-nav-filter { width: 100%; margin: 2px 0 6px; padding: 4px 8px; font-size: 0.8rem; }
+.g-nav-select { display: none; }
+[data-nav] { scroll-margin-top: 12px; }
+@media (max-width: 1000px) {
+  .g-with-nav { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .g-nav { display: none; }
+  .g-nav-select {
+    display: flex; align-items: center; gap: 8px; position: sticky; top: 0; z-index: 30;
+    padding: 8px 0; background: var(--bg); font-size: 0.85rem; color: var(--muted);
+  }
+  .g-nav-select select { flex: 1; min-width: 0; }
+  [data-nav] { scroll-margin-top: 56px; }
+}
 
 .g-card {
   background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
@@ -156,10 +191,27 @@ summary { cursor: pointer; color: var(--muted); }
 .g-tag { font-size: 0.7rem; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; }
 .g-tag.warn { color: #fbbf24; border-color: #fbbf24; }
 
-/* --- side boxes: everything that is not a step's default action ------------- */
+/* --- the options panel: everything that is not a step's default action ------ */
+/* Hidden until asked for: a tab on the right edge opens it over the page. */
+.g-options-tab {
+  position: fixed; right: 0; top: 50%; transform: translateY(-50%); z-index: 40;
+  writing-mode: vertical-rl; padding: 14px 7px; font: inherit; font-size: 0.8rem; font-weight: 600;
+  color: var(--text); background: var(--panel); border: 1px solid var(--border); border-right: 0;
+  border-radius: 10px 0 0 10px; cursor: pointer; box-shadow: -2px 0 10px #0006;
+}
+.g-options-tab:hover, .g-options-tab.open { color: var(--accent); border-color: var(--accent); }
+.g-options {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 50; width: min(420px, 92vw);
+  overflow-y: auto; padding: 14px 16px 30px; background: var(--bg);
+  border-left: 1px solid var(--border); box-shadow: -10px 0 30px #000a; outline: none;
+}
+.g-options-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.g-options-head h2 { margin: 0; font-size: 1rem; }
 .g-side { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; margin: 0; }
-.g-side > summary { padding: 12px 16px; font-size: 0.9rem; font-weight: 600; color: var(--text); }
-.g-side[open] > summary { border-bottom: 1px solid var(--border); }
+.g-side-title { margin: 0; padding: 12px 16px 6px; font-size: 0.9rem; font-weight: 600; color: var(--text); }
+/* One group alone in the panel: the panel's own heading already names it. */
+.g-options .g-side:only-child > .g-side-title { display: none; }
+.g-options .g-side:only-child > .g-side-body { padding-top: 6px; }
 .g-side-body { padding: 2px 16px 14px; }
 .g-side-body h4 {
   margin: 16px 0 6px; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted);

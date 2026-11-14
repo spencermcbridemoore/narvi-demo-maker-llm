@@ -254,7 +254,7 @@ export function ResponsesStep(props: Props) {
   );
 
   return (
-    <StepLayout side={side}>
+    <StepLayout side={side} sideLabel="Privacy & other options">
       {!approved && !has && (
         <section className="g-card">
           <h2>Responses</h2>
