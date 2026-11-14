@@ -5,6 +5,8 @@ fixed rules:
   * split votes  -> majority (use an odd k); confidence = majority share
   * a tie (only possible when some samples failed) -> TIE_DEFAULT, flagged
   * a teacher override always wins (resolved_by = "teacher")
+  * no answer (an empty response, or the export's "NA") -> 0 with no model call,
+    resolved_by = "no_answer"
 Flags mark cells for review regardless of the confidence threshold.
 """
 
@@ -59,8 +61,23 @@ def addresses_grader(response_text: str) -> bool:
     return bool(_GRADER_DIRECTED.search(response_text))
 
 
-def resolve(cell: Cell, grader_directed: bool = False) -> Cell:
-    """Recompute final/confidence/flags from the cell's samples (and override)."""
+# What an LMS export writes when a student submitted nothing (Canvas exports say "NA").
+NO_ANSWER = ("", "na")
+
+
+def is_no_answer(response_text: str) -> bool:
+    return response_text.strip().lower() in NO_ANSWER
+
+
+def resolve(cell: Cell, grader_directed: bool = False, no_answer: bool = False) -> Cell:
+    """Recompute final/confidence/flags from the cell's samples (and override). A
+    response with no answer earns nothing on any item; the model is never asked."""
+    if no_answer:
+        cell.final, cell.confidence, cell.votes, cell.resolved_by = 0, 1.0, "", "no_answer"
+        cell.flags = ["no_answer"]
+        if cell.override is not None:
+            cell.final, cell.resolved_by = cell.override, "teacher"
+        return cell
     samples = cell.samples
     votes = [s.verdict for s in samples if s.verdict is not None]
     flags: list[str] = []

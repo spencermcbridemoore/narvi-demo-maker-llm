@@ -26,7 +26,7 @@ from pathlib import Path
 import yaml
 
 from ..config import REPO_ROOT
-from . import rubric
+from . import aggregate, rubric
 from .model import (ALSO_COUNTS, DOES_NOT_COUNT, SHARED, Assessment, Criterion, Finding, Problem, Response,
                     every_version)
 
@@ -786,6 +786,46 @@ def yaml_kind(text: str) -> tuple[str, object]:
     return "", None
 
 
+_LIST_LINE = re.compile(r"^([ \t]*)-[ \t]+(\S.*?)[ \t]*$")
+
+
+def _outlines(text: str) -> dict[str, str]:
+    """Specification lines the file writes as an outline: a line, then more-indented
+    "- " lines under it. YAML reads such an outline as ONE line run together ("it must
+    - Mention W_nc - Indicate ..."). This maps each run-together line to the outline as
+    written, one sub-point per line, indented by depth, so the grader is told the
+    structure the teacher wrote. Only exact matches are replaced, so a line that merely
+    contains " - " (such as "Kf - Ki") is never split."""
+    lines = text.splitlines()
+    out: dict[str, str] = {}
+    for i, line in enumerate(lines):
+        head = _LIST_LINE.match(line)
+        if not head:
+            continue
+        indent = len(head.group(1).expandtabs())
+        under: list[tuple[int, str]] = []
+        for raw in lines[i + 1:]:
+            if not raw.strip() or raw.lstrip().startswith("#"):
+                break
+            depth = len(raw) - len(raw.lstrip())
+            if depth <= indent:
+                break
+            under.append((depth, raw.strip()))
+        bullets = sorted({d for d, t in under if t.startswith("- ")})
+        if not bullets:
+            continue
+        parts = [head.group(2)]
+        for depth, t in under:
+            if t.startswith("- "):
+                level = sum(1 for b in bullets if b <= depth)
+                parts.append("  " * level + "- " + t[2:].strip())
+            else:
+                parts[-1] += " " + t          # a wrapped line continues the line above
+        folded = " ".join([head.group(2)] + [t for _, t in under])
+        out[folded] = "\n".join(parts)
+    return out
+
+
 def read_rubric_yaml(text: str) -> tuple[list[Criterion], list[Finding]]:
     """A rubric in Chen's YAML (``judgment``, then ``rubrics``: ``id``, ``item``,
     ``specifications``) as the rubric every version shares, plus findings. It has no
@@ -806,6 +846,8 @@ def read_rubric_yaml(text: str) -> tuple[list[Criterion], list[Finding]]:
              "as credit or no credit.", "code")
     items: list[Criterion] = []
     taken: set[str] = set()
+    outlines = _outlines(text)
+    restored = 0
     for n, entry in enumerate(data["rubrics"], start=1):
         if not isinstance(entry, dict):
             note("rubric_entry_skipped", f"Entry {n} of the rubric is not an item, so it was not used.")
@@ -823,6 +865,8 @@ def read_rubric_yaml(text: str) -> tuple[list[Criterion], list[Finding]]:
         text_ = _tidy(str(entry.get("item") or ""))
         specs = entry.get("specifications") or []
         specs = [_tidy(str(s)) for s in (specs if isinstance(specs, list) else [specs]) if str(s).strip()]
+        restored += sum(1 for s in specs if s in outlines)
+        specs = [outlines.get(s, s) for s in specs]
         others = [str(k) for k in entry if k not in ("id", "item", "specifications")]
         if others:
             note("rubric_keys_ignored",
@@ -838,6 +882,10 @@ def read_rubric_yaml(text: str) -> tuple[list[Criterion], list[Finding]]:
         ))
     if not items:
         raise NothingToLoad("The rubric file has no items, so there is nothing to load.")
+    if restored:
+        note("specification_outline_kept",
+             f"{restored} specification {'line is' if restored == 1 else 'lines are'} written as an "
+             "outline with sub-points. The sub-points are kept on their own lines, as in the file.")
     return items, found
 
 
@@ -980,7 +1028,7 @@ def parse_responses(csv_text: str, bank: Assessment) -> tuple[list[Response], li
             problem_id = next((p.id for p in versions if rubric.norm_id(p.id) == wanted), "")
             if not problem_id:
                 unknown[label] = unknown.get(label, 0) + 1
-        if not text.strip():
+        if aggregate.is_no_answer(text):
             empty += 1
         responses.append(Response(
             id=rid, problem_id=problem_id, text=text, external_id=sid or rid, version_label=label,
@@ -1012,8 +1060,8 @@ def parse_responses(csv_text: str, bank: Assessment) -> tuple[list[Response], li
              "in file order.", "code", "student_id")
     if empty:
         note("responses_empty",
-             f"{empty} {'response is' if empty == 1 else 'responses are'} empty. "
-             "Empty responses are still graded, as empty answers.")
+             f"{empty} {'response is' if empty == 1 else 'responses are'} empty or say NA (no answer). "
+             f"{'It gets' if empty == 1 else 'They get'} 0 on every item, without asking the model.")
     if cols.leftovers(rows):
         note("columns_ignored", cols.leftovers(rows))
     return responses, found

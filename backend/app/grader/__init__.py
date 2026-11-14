@@ -17,4 +17,7 @@ Moving it to its own repo later is a copy of this package plus ``app/llm``.
     store.py      in-memory + JSON-on-disk persistence, SQLite sample cache
     api.py        FastAPI router mounted at /grader/api
     cli.py        the same runner from the command line (benchmarking)
+    batch.py      grade export folders (question or package) from the terminal, with reports
+    agreement.py  AI vs human 0/1 grades: agreement, kappa, direction
+    figures.py    figures told to the grader as approved written descriptions
 """

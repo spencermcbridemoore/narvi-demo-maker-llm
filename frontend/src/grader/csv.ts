@@ -527,6 +527,75 @@ export function prepareExplanations(text: string, roster: string[], pseudonymize
   };
 }
 
+// --- grades back into the export -----------------------------------------------
+
+export type GradedExport = { csv: string; matched: number; rows: number; added: string[] };
+
+/**
+ * The explanations export a bank was made from, with grades in its own rubric_1..N
+ * columns (added at the end when the export has none). The export is read again here,
+ * in the browser, and each row's one-time id is worked out again exactly as at upload
+ * (in file order; a repeated id gets "-2", "-3" as on the server), so the original ids
+ * never need to reach the server. ``grades`` maps "<one-time id>#<item key>" to 0/1, and
+ * ``versions`` maps a one-time id to its version, to check that the file is the right
+ * one. A row without a grade keeps those columns empty. Throws when the file is not an
+ * explanations export, or no row lines up with the bank.
+ */
+export function gradedExport(
+  text: string,
+  grades: Map<string, number | null>,
+  keys: string[],
+  versions: Map<string, string>,
+): GradedExport {
+  if (recognize(text).kind !== "explanations")
+    throw new Error("This is not an explanations export (it needs ItemID, ProblemBody and Explanation columns).");
+  const { rows } = parseTable(text.replace(/^﻿/, ""));
+  const header = [...rows[0]];
+  const body = rows.slice(1);
+
+  // The one-time ids as the upload made them: pseudonymized, or the ids as they were.
+  const idsFor = (pseudonymize: boolean) => {
+    const out = parseTable(prepareExplanations(text, [], pseudonymize).csv).rows.slice(1);
+    const seen = new Map<string, number>();
+    return out.map(([sid, item]) => {
+      const n = (seen.get(sid) ?? 0) + 1;
+      seen.set(sid, n);
+      return { id: n === 1 ? sid : `${sid}-${n}`, item };
+    });
+  };
+  const fits = (ids: { id: string; item: string }[]) => ids.filter((r) => versions.get(r.id) === r.item).length;
+  const swapped = idsFor(true);
+  const plain = idsFor(false);
+  const ids = fits(plain) > fits(swapped) ? plain : swapped;
+  const matched = fits(ids);
+  if (!matched)
+    throw new Error("No row of this file lines up with this bank's responses. Choose the export this bank was made from.");
+
+  const names = header.map(norm);
+  const added: string[] = [];
+  const column = new Map<string, number>();
+  for (const key of keys) {
+    let at = names.indexOf(norm(`rubric_${key}`));
+    if (at < 0) {
+      header.push(`rubric_${key}`);
+      added.push(`rubric_${key}`);
+      at = header.length - 1;
+    }
+    column.set(key, at);
+  }
+  const out = body.map((row, i) => {
+    const line = [...row, ...Array(Math.max(0, header.length - row.length)).fill("")];
+    const { id, item } = ids[i] ?? { id: "", item: "" };
+    const ours = versions.get(id) === item;
+    for (const key of keys) {
+      const grade = ours ? grades.get(`${id}#${key}`) : undefined;
+      line[column.get(key)!] = grade === undefined || grade === null ? "" : String(grade);
+    }
+    return line;
+  });
+  return { csv: toCsv([header, ...out]), matched, rows: body.length, added };
+}
+
 /** What happened in the browser before the upload, as one plain paragraph. */
 export function describePrepared(p: Prepared): string {
   const ids = Object.keys(p.idMap).length;

@@ -20,7 +20,7 @@ import {
   type Run,
   type RunSummary,
 } from "./api";
-import { download, toCsv } from "./csv";
+import { download, gradedExport, readTextFile, toCsv, type TextFile } from "./csv";
 import { Lines, OriginMark } from "./Drafts";
 import { ConfirmButton, RunProblem, SideBox, StepLayout, deleteBankQuestion, fmtDate, isLegacy } from "./parts";
 import { displayId, errMsg, f2, fmtInt, pct } from "./util";
@@ -32,6 +32,7 @@ const FLAG_TEXT: Record<string, string> = {
   quote_missing: "a quoted phrase isn't in the response",
   no_evidence: "credit given without quoting anything",
   addresses_grader: "the response talks to the grader",
+  no_answer: "no answer (empty or NA): 0, without asking the model",
 };
 
 /** Mirrors backend model.instance_id(): "<response id>#<item key>". */
@@ -44,6 +45,9 @@ type Props = {
   run: Run;
   runs: RunSummary[]; // every run of this bank, newest first
   idMap: Record<string, string>;
+  /** The explanations export this bank was made from, if this tab still has it (never uploaded). */
+  source: TextFile | null;
+  onSource: (f: TextFile) => void;
   hardFlags: string[];
   onRunChange: (r: Run) => void;
   onOpenRun: (id: string) => void;
@@ -51,7 +55,7 @@ type Props = {
   onError: (m: string) => void;
 };
 
-export function Results({ bank, run, runs, idMap, hardFlags, onRunChange, onOpenRun, onDeleted, onError }: Props) {
+export function Results({ bank, run, runs, idMap, source, onSource, hardFlags, onRunChange, onOpenRun, onDeleted, onError }: Props) {
   const [threshold, setThreshold] = useState(0.8);
   const [onlyReview, setOnlyReview] = useState(false);
   const [compare, setCompare] = useState(false);
@@ -90,7 +94,19 @@ export function Results({ bank, run, runs, idMap, hardFlags, onRunChange, onOpen
   );
 
   // Rows and columns in display order. A response sits under the version it was
-  // graded with, whatever version it has now.
+  // graded with, whatever version it has now: an item of that version's own shows which
+  // one. A rubric shared by every version has the same items everywhere, so it cannot
+  // tell; then the response's own version decides (otherwise it would be listed, and
+  // counted, under every version).
+  const gradedVersion = useMemo(() => {
+    // An item no other version has (its id is its own) pins the version it was graded under.
+    const owners = new Map<string, number>();
+    for (const v of versions) for (const c of v.items) owners.set(c.id, (owners.get(c.id) ?? 0) + 1);
+    return (r: ResponseItem) =>
+      versions.find((v) =>
+        v.items.some((c) => owners.get(c.id) === 1 && cells.get(instanceId(r, c))?.criterion_id === c.id),
+      )?.id ?? r.problem_id;
+  }, [versions, cells]);
   const layout = useMemo(
     () =>
       versions
@@ -98,11 +114,14 @@ export function Results({ bank, run, runs, idMap, hardFlags, onRunChange, onOpen
           version,
           crits: version.items,
           resps: bank.responses.filter(
-            (r) => asGraded(r) && version.items.some((c) => cells.get(instanceId(r, c))?.criterion_id === c.id),
+            (r) =>
+              asGraded(r) &&
+              gradedVersion(r) === version.id &&
+              version.items.some((c) => cells.get(instanceId(r, c))?.criterion_id === c.id),
           ),
         }))
         .filter((x) => x.resps.length > 0),
-    [versions, bank.responses, cells, asGraded],
+    [versions, bank.responses, cells, asGraded, gradedVersion],
   );
   // The grades on screen. Everything counted and exported below is taken from these.
   const visible = useMemo(
@@ -217,6 +236,33 @@ export function Results({ bank, run, runs, idMap, hardFlags, onRunChange, onOpen
           ]);
         }
     return rows;
+  };
+
+  /** The original export, filled in with the grades on screen, in the browser. */
+  const exportOriginal = (file: TextFile) => {
+    const grades = new Map<string, number | null>();
+    const graded = new Map<string, string>();
+    for (const { version, crits, resps } of layout)
+      for (const r of resps) {
+        graded.set(r.id, version.id);
+        for (const c of crits) {
+          const cell = cells.get(instanceId(r, c));
+          if (cell) grades.set(`${r.id}#${c.key}`, cell.final);
+        }
+      }
+    const keys = [...new Set(versions.flatMap((v) => v.items.map((c) => c.key)))];
+    try {
+      const out = gradedExport(file.text, grades, keys, graded);
+      download(`${file.name.replace(/\.[^.]+$/, "") || "export"}_ai.csv`, out.csv);
+      onSource(file);
+    } catch (e) {
+      onError(errMsg(e));
+    }
+  };
+  const chooseOriginal = (input: HTMLInputElement) => {
+    const f = input.files?.[0];
+    input.value = "";
+    if (f) readTextFile(f).then(exportOriginal, (e) => onError(errMsg(e)));
   };
 
   const removeBank = async () => {
@@ -374,6 +420,24 @@ export function Results({ bank, run, runs, idMap, hardFlags, onRunChange, onOpen
               always in the review queue.
             </span>
           </div>
+          {!legacy && (
+            <div className="g-row">
+              {source ? (
+                <button className="g-ghost" onClick={() => exportOriginal(source)}>
+                  Export into {source.name}
+                </button>
+              ) : (
+                <label className="g-field">
+                  Export into the original file: choose the explanations export this bank was made from
+                  <input type="file" accept=".csv,text/csv" onChange={(e) => chooseOriginal(e.target)} />
+                </label>
+              )}
+              <span className="g-hint">
+                The export with these grades in its own rubric_1..N columns, every row as in the file (rows without a
+                grade are left empty). It is filled in here, in your browser; the file is not uploaded.
+              </span>
+            </div>
+          )}
         </section>
 
         {compare && metrics?.run && <MetricsPanel m={metrics} />}

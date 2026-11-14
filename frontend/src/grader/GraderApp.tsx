@@ -18,6 +18,7 @@ import {
   type Chosen,
   type Plan,
   type Prepared,
+  type TextFile,
 } from "./csv";
 import {
   ConfirmButton,
@@ -78,6 +79,9 @@ export default function GraderApp() {
   const [idMap, setIdMap] = useState<Record<string, string>>({});
   // The one-time-id keys of the banks used in this tab. They live only here: never sent, lost on reload.
   const idMaps = useRef<Record<string, Record<string, string>>>({});
+  // The explanations export each bank was made from, kept only in this tab (never uploaded),
+  // so grades can be written back into it. Lost on reload: the Results step asks for the file then.
+  const sources = useRef<Record<string, TextFile>>({});
   const [step, setStep] = useState<Step>("problem");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -134,7 +138,8 @@ export default function GraderApp() {
     prevStatus.current = run?.status;
   }, [run, refreshBank]);
 
-  const onCreated = (b: Bank, map: Record<string, string> = {}, note: string | null = null) => {
+  const onCreated = (b: Bank, map: Record<string, string> = {}, note: string | null = null, source?: TextFile) => {
+    if (source) sources.current[b.id] = source;
     setBank(b);
     setRuns([]);
     setRun(null);
@@ -289,6 +294,10 @@ export default function GraderApp() {
             run={mine}
             runs={runs}
             idMap={idMap}
+            source={sources.current[bank.id] ?? null}
+            onSource={(f) => {
+              sources.current[bank.id] = f;
+            }}
             hardFlags={health?.hard_flags ?? DEFAULT_HARD_FLAGS}
             onRunChange={setRun}
             onOpenRun={openRun}
@@ -340,7 +349,7 @@ function ProblemStep({
 }: {
   examples: Example[];
   currentId: string | undefined;
-  onCreated: (b: Bank, map?: Record<string, string>, note?: string | null) => void;
+  onCreated: (b: Bank, map?: Record<string, string>, note?: string | null, source?: TextFile) => void;
   onOpen: (id: string) => void;
   onDeleted: (id: string, note: string) => void;
   onError: (m: string) => void;
@@ -418,7 +427,12 @@ function ProblemStep({
         rubric?.note ?? "",
         answers?.note ?? "",
       ].filter(Boolean);
-      onCreated(bank, prepared?.idMap ?? {}, notes.length ? notes.join(" ") : null);
+      onCreated(
+        bank,
+        prepared?.idMap ?? {},
+        notes.length ? notes.join(" ") : null,
+        problems.kind === "explanations" ? { text: problems.text, name: problems.name, note: "" } : undefined,
+      );
       setFiles([]);
     });
   const pasted = () =>
@@ -665,6 +679,9 @@ const RUN_STATUS: Record<string, string> = {
   error: "stopped by a problem",
 };
 
+/** Mirrors backend aggregate.is_no_answer: an empty answer, or the export's "NA". */
+const isNoAnswer = (text: string) => ["", "na"].includes(text.trim().toLowerCase());
+
 function GradeStep({
   bank,
   health,
@@ -692,16 +709,22 @@ function GradeStep({
   const running = run?.status === "running";
   const blockers = bank.check.grade_blockers;
 
-  const { responses, pairs } = useMemo(() => {
+  const { responses, pairs, blank, blankPairs } = useMemo(() => {
     const cap = maxResponses ? Math.max(1, Number(maxResponses)) : Infinity;
     let responses = 0;
     let pairs = 0;
+    let blank = 0; // no answer (empty or NA): 0 on every item, no model call (backend aggregate.is_no_answer)
+    let blankPairs = 0;
     for (const p of bank.problems) {
-      const n = Math.min(cap, bank.responses.filter((r) => r.problem_id === p.id && !r.excluded).length);
-      responses += n;
-      pairs += n * itemsFor(bank, p.id).length;
+      const graded = bank.responses.filter((r) => r.problem_id === p.id && !r.excluded).slice(0, cap);
+      const items = itemsFor(bank, p.id).length;
+      const none = graded.filter((r) => isNoAnswer(r.text)).length;
+      responses += graded.length;
+      pairs += graded.length * items;
+      blank += none;
+      blankPairs += none * items;
     }
-    return { responses, pairs };
+    return { responses, pairs, blank, blankPairs };
   }, [bank, maxResponses]);
 
   const start = async () => {
@@ -786,8 +809,10 @@ function GradeStep({
           <>
             <p className="g-muted">
               {plural(responses, "response")} × the rubric items of {responses === 1 ? "its" : "their"} version ={" "}
-              {plural(pairs, "grade")}, each decided by {plural(k, "vote")}: <strong>{pairs * k}</strong> model calls
-              {health ? ` on ${health.model}` : ""}. Grading the same thing again is free, because answers are cached.
+              {plural(pairs, "grade")}, each decided by {plural(k, "vote")}: <strong>{(pairs - blankPairs) * k}</strong>{" "}
+              model calls{health ? ` on ${health.model}` : ""}.
+              {blank > 0 && ` ${plural(blank, "response has", "responses have")} no answer (empty or NA): 0 on every item, without a model call.`}{" "}
+              Grading the same thing again is free, because answers are cached.
             </p>
             <div className="g-row">
               <button className="g-primary" disabled={busy || running || pairs === 0} onClick={start}>
