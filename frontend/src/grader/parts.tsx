@@ -1,25 +1,79 @@
 // Small pieces shared by the grader's steps.
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import type { Bank, Finding } from "./api";
 
-/** The collapsed box that holds everything that is not the step's default action. */
-export function SideBox({ title, children, open }: { title: string; children: ReactNode; open?: boolean }) {
+/** One group of what is not the step's default action, shown in the step's options panel. */
+export function SideBox({ title, children }: { title: string; children: ReactNode; open?: boolean }) {
   return (
-    <details className="g-side" open={open}>
-      <summary>{title}</summary>
+    <section className="g-side">
+      <h3 className="g-side-title">{title}</h3>
       <div className="g-side-body">{children}</div>
-    </details>
+    </section>
   );
 }
 
-/** A step: its default action on the left, its side box on the right. */
-export function StepLayout({ children, side }: { children: ReactNode; side?: ReactNode }) {
+/**
+ * A step: its default action, with what is not the default in an options panel that
+ * stays hidden until asked for (a tab on the right edge opens it; Esc or Close shuts
+ * it), so the step has the full width. ``nav`` adds a navigation column on the left.
+ */
+export function StepLayout({
+  children,
+  side,
+  sideLabel = "More options",
+  nav,
+}: {
+  children: ReactNode;
+  side?: ReactNode;
+  sideLabel?: string;
+  nav?: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const tab = useRef<HTMLButtonElement>(null);
+  const panel = useRef<HTMLElement>(null);
+  const close = useCallback(() => {
+    setOpen(false);
+    tab.current?.focus();
+  }, []);
+  useEffect(() => {
+    if (!open) return;
+    panel.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, close]);
   return (
-    <div className={side ? "g-two" : "g-stack"}>
+    <div className={nav ? "g-with-nav" : "g-stack"}>
+      {nav}
       <div className="g-stack">{children}</div>
-      {side && <aside className="g-stack">{side}</aside>}
+      {side && (
+        <>
+          <button
+            ref={tab}
+            className={`g-options-tab${open ? " open" : ""}`}
+            aria-expanded={open}
+            aria-controls="g-options"
+            onClick={() => (open ? close() : setOpen(true))}
+          >
+            {sideLabel}
+          </button>
+          {open && (
+            <aside id="g-options" className="g-options" aria-label={sideLabel} tabIndex={-1} ref={panel}>
+              <div className="g-options-head">
+                <h2>{sideLabel}</h2>
+                <button className="g-ghost small" onClick={close}>
+                  Close
+                </button>
+              </div>
+              <div className="g-stack">{side}</div>
+            </aside>
+          )}
+        </>
+      )}
     </div>
   );
 }

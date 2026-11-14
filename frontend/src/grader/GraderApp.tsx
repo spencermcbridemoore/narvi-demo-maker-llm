@@ -610,7 +610,7 @@ function ProblemStep({
   );
 
   return (
-    <StepLayout side={side}>
+    <StepLayout side={side} sideLabel="Other ways to start">
       <section className="g-card">
         <h2>Upload a problem or problem bank</h2>
         <p className="g-muted">
@@ -789,7 +789,7 @@ function GradeStep({
   );
 
   return (
-    <StepLayout side={side}>
+    <StepLayout side={side} sideLabel="Run settings">
       <section className="g-card">
         <h2>Grade</h2>
         {blockers.length > 0 ? (

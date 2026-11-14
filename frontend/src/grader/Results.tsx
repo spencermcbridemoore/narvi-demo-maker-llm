@@ -349,7 +349,7 @@ export function Results({ bank, run, runs, idMap, source, onSource, hardFlags, o
 
   return (
     <div className={selected ? "g-results with-drawer" : "g-results"}>
-      <StepLayout side={side}>
+      <StepLayout side={side} sideLabel="More">
         <section className="g-card g-controls">
           <div className="g-row between">
             <div>

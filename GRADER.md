@@ -36,7 +36,14 @@ grader_kit/rubric_grader_handoff/data/instances.csv
 
 ## Flow
 
-Each step shows one default action. Everything else is in a collapsed side box.
+Each step shows one default action. Everything else is in its side box: an options
+panel that stays hidden until the tab on the right edge opens it (Esc or Close shuts it),
+so the step has the full width. The Rubric step also has a navigation column on the left
+(status, the shared items, every version, with a find box when there are many); the
+section on screen stays highlighted, a dot marks a version with something needed and a
+ring one with its own wording. On a narrow screen it is a "Jump to" menu. A version
+without wording of its own shows one folded line, "Word an item differently for this
+version", instead of the controls.
 
 1. **Problem**: choose one or more files: a Problem Info CSV or an explanations
    export (the problem, in one or more versions), a rubric file, and with a Problem

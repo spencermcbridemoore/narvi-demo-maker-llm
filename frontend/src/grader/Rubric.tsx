@@ -21,6 +21,7 @@ import {
   acceptTogether,
 } from "./Drafts";
 import { ConfirmButton, FilledMark, FindingList, SideBox, StepLayout, fmtDate, isLegacy } from "./parts";
+import { SectionNav, type NavEntry } from "./SectionNav";
 import { errMsg } from "./util";
 
 type ItemDraft = { uid: string; key: string; text: string; weight: string; specs: string[] };
@@ -438,7 +439,7 @@ export function RubricStep({ bank, runCount, onBank, onError, onNotice, onNext }
     const proposal = proposals.get(v.id);
     const suggested = proposal?.items.find((i) => i.text === "" && i.key === item.key);
     return (
-      <div className="g-item" key={item.uid}>
+      <div className="g-item" key={item.uid} data-nav={v.uid === SHARED_UID ? `item:${item.key}` : undefined}>
         <div className="g-item-head">
           <strong>Item {item.key}</strong>
           {own && <span className="g-tag">this version's own wording</span>}
@@ -858,7 +859,7 @@ export function RubricStep({ bank, runCount, onBank, onError, onNotice, onNext }
     bank.criteria
       .filter((c) => c.problem_id === problemId)
       .map((c) => (
-        <div className="g-item" key={c.id}>
+        <div className="g-item" key={c.id} data-nav={problemId === SHARED ? `item:${c.key}` : undefined}>
           <div className="g-item-head">
             <strong>{c.label}</strong>
             {problemId !== SHARED && sharedMode && <span className="g-tag">this version's own wording</span>}
@@ -876,9 +877,84 @@ export function RubricStep({ bank, runCount, onBank, onError, onNotice, onNext }
         </div>
       ));
 
+  /** The controls to word one shared item a version's own way, or to let the AI adapt them all. */
+  const ownPicker = (v: VersionDraft, unworded: ItemDraft[], chosen: ItemDraft, proposal: Proposal | undefined) => (
+    <div className="g-row">
+      {unworded.length > 1 && (
+        <select
+          value={chosen.key}
+          onChange={(e) => setOwnKey((m) => ({ ...m, [v.uid]: e.target.value }))}
+          aria-label="Item to word its own way"
+        >
+          {unworded.map((s) => (
+            <option key={s.key} value={s.key}>
+              Item {s.key}
+              {s.text.trim() ? `: ${s.text.trim().length > 48 ? `${s.text.trim().slice(0, 47)}…` : s.text.trim()}` : ""}
+            </option>
+          ))}
+        </select>
+      )}
+      <button className="g-ghost small" onClick={() => addItem(v, chosen)}>
+        Word item {chosen.key} its own way
+      </button>
+      {ai.own_wording.includes(v.id) && !proposal && (
+        <button
+          className="g-ghost small"
+          disabled={busy || drafting}
+          title="The AI adapts the shared items to this version's problem. You review what it writes."
+          onClick={() => draftNow({ mode: "example", problem_ids: [idOf(v.uid)] })}
+        >
+          Let the AI adapt the rubric to it
+        </button>
+      )}
+    </div>
+  );
+
+  // The navigation column: the status, the shared items, then every version. A dot marks
+  // a version with something needed or an AI draft waiting; a ring, one with its own wording.
+  const waiting = new Set([...toFill, ...toDecide].map((b) => b.problem_id ?? ""));
+  const itemLabel = (key: string, text: string) => `Item ${key}${text.trim() ? ` · ${text.trim()}` : ""}`;
+  const sharedEntries = editable
+    ? sharedMode
+      ? shared.items.map((i) => ({ key: `item:${i.key}`, label: itemLabel(i.key, i.text) }))
+      : []
+    : bank.criteria
+        .filter((c) => c.problem_id === SHARED)
+        .map((c) => ({ key: `item:${c.key}`, label: itemLabel(c.key, c.text) }));
+  const versionEntries: NavEntry[] = editable
+    ? versions.map((v) => ({
+        key: `version:${v.uid}`,
+        label: v.id || v.idBox || "(no name yet)",
+        mark: waiting.has(v.id) || proposals.has(v.id) || !v.text.trim()
+          ? "needed"
+          : sharedMode && v.items.length > 0
+            ? "own"
+            : undefined,
+      }))
+    : bank.problems.map((p) => ({
+        key: `version:${p.id}`,
+        label: p.id,
+        mark: sharedMode && bank.criteria.some((c) => c.problem_id === p.id) ? "own" : undefined,
+      }));
+  const nav = (
+    <SectionNav
+      label="Rubric sections"
+      groups={[
+        {
+          title: "Rubric",
+          entries: [
+            { key: "status", label: "Status & approval", mark: editable && (toFill.length > 0 || toDecide.length > 0) ? "needed" : undefined },
+            ...sharedEntries,
+          ],
+        },
+        ...(versionEntries.length ? [{ title: legacy ? "Problems" : "Versions", entries: versionEntries }] : []),
+      ]}
+    />
+  );
+
   return (
-    <StepLayout side={side}>
-      <section className="g-card">
+    <StepLayout side={side} nav={nav}>
+      <section className="g-card" data-nav="status">
         <div className="g-row between">
           <h2>
             Rubric{" "}
@@ -1066,7 +1142,7 @@ export function RubricStep({ bank, runCount, onBank, onError, onNotice, onNext }
       )}
       {!editable &&
         bank.problems.map((p) => (
-          <section className="g-card" key={p.id}>
+          <section className="g-card" key={p.id} data-nav={`version:${p.id}`}>
             <h3>
               {legacy ? "Problem" : "Version"} {p.id}{" "}
               <span className="g-muted">· {plural(responsesOf(p.id), "response")}</span>
@@ -1135,7 +1211,7 @@ export function RubricStep({ bank, runCount, onBank, onError, onNotice, onNext }
             const unworded = shared.items.filter((s) => !v.items.some((i) => i.key === s.key));
             const chosen = unworded.find((s) => s.key === ownKey[v.uid]) ?? unworded[0];
             return (
-              <section className="g-card" key={v.uid}>
+              <section className="g-card" key={v.uid} data-nav={`version:${v.uid}`}>
                 <div className="g-row g-version-head">
                   <label className="g-inline">
                     Version
@@ -1192,47 +1268,23 @@ export function RubricStep({ bank, runCount, onBank, onError, onNotice, onNext }
                 </details>
 
                 {sharedMode ? (
-                  // Nothing to word its own way until the shared rubric has items.
-                  (shared.items.length > 0 || v.items.length > 0 || proposal) && (
+                  // Nothing to word its own way until the shared rubric has items. A version
+                  // without wording of its own shows one folded line, not the controls.
+                  (shared.items.length > 0 || v.items.length > 0 || proposal) &&
+                  (v.items.length === 0 && !proposal ? (
+                    <details className="g-inner g-own">
+                      <summary>Word an item differently for this version (optional)</summary>
+                      <p className="g-hint">This version is graded with the shared rubric as it is.</p>
+                      {chosen && ownPicker(v, unworded, chosen, proposal)}
+                    </details>
+                  ) : (
                   <>
                     <h4>Its own wording (optional)</h4>
-                    {v.items.length === 0 && !proposal && (
-                      <p className="g-hint">This version is graded with the shared rubric as it is.</p>
-                    )}
                     {draftBlock(v)}
                     {v.items.map((item) => itemBoxes(v, item, sharedByKey.get(item.key)))}
-                    {chosen && (
-                      <div className="g-row">
-                        {unworded.length > 1 && (
-                          <select
-                            value={chosen.key}
-                            onChange={(e) => setOwnKey((m) => ({ ...m, [v.uid]: e.target.value }))}
-                            aria-label="Item to word its own way"
-                          >
-                            {unworded.map((s) => (
-                              <option key={s.key} value={s.key}>
-                                Item {s.key}
-                              </option>
-                            ))}
-                          </select>
-                        )}
-                        <button className="g-ghost small" onClick={() => addItem(v, chosen)}>
-                          Word item {chosen.key} its own way
-                        </button>
-                        {ai.own_wording.includes(v.id) && !proposal && (
-                          <button
-                            className="g-ghost small"
-                            disabled={busy || drafting}
-                            title="The AI adapts the shared items to this version's problem. You review what it writes."
-                            onClick={() => draftNow({ mode: "example", problem_ids: [idOf(v.uid)] })}
-                          >
-                            Let the AI adapt the rubric to it
-                          </button>
-                        )}
-                      </div>
-                    )}
+                    {chosen && ownPicker(v, unworded, chosen, proposal)}
                   </>
-                  )
+                  ))
                 ) : (
                   <>
                     <h4>Rubric items</h4>
