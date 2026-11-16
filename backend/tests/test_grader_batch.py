@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from app.grader import batch, runner, store
+from app.grader import batch, grade, runner, store
 from app.grader.adapters import read_rubric_yaml
 from app.grader.agreement import stats
 from app.grader.model import Sample
@@ -52,6 +52,8 @@ def _grader_tmp(tmp_path, monkeypatch):
     yield
     store.reset_for_tests()
     runner._RUNS.clear()
+    grade._OVERRIDE.clear()
+    grade.grading_model.cache_clear()
 
 
 def _fake(monkeypatch, calls: list):
@@ -179,6 +181,60 @@ def test_a_question_folder_end_to_end(tmp_path, monkeypatch):
     calls.clear()
     assert batch.main([str(q), "--out", str(out), "--figures", "text", "--k", "3"]) == 0
     assert calls == []
+
+
+def test_prices_match_whole_model_names_only():
+    assert batch._price("gpt-5-mini", None) == batch.PRICES["gpt-5-mini"]
+    assert batch._price("gpt-4.1-mini-2025-04-14", None) == batch.PRICES["gpt-4.1-mini"]
+    assert batch._price("gpt-5.4-mini", None) is None       # not priced as gpt-5
+    assert batch._price("anything", "1,4") == (1.0, 1.0, 4.0)
+    assert batch._price("@vertex-general/gemini-2.5-flash", None) == batch.PRICES["gemini-2.5-flash"]
+    assert batch._price("@vertex-general/gemini-3.5-flash", None) is None
+    assert [bool(batch.REASONING.match(m)) for m in ("gpt-5-nano", "gpt-5-chat", "gpt-6-luna", "o4-mini",
+                                                       "gpt-4.1-nano", "claude-haiku-4-5")] == \
+        [True, False, True, True, False, False]
+
+
+@needs_node
+def test_another_model_grades_into_its_own_folder(tmp_path, monkeypatch):
+    calls: list = []
+    _fake(monkeypatch, calls)
+    built: list = []
+
+    class FakeModel:
+        def __init__(self, name, reasoning):
+            self.deployment_name = name
+            self.reasoning_effort = "minimal" if reasoning else None
+
+    def fake_named(name, reasoning, profile=None):
+        built.append((name, reasoning) if profile is None else (name, reasoning, profile))
+        return FakeModel(name, reasoning)
+
+    monkeypatch.setattr(grade, "get_model_named", fake_named)
+    monkeypatch.setattr(runner, "model_name", grade.model_name)      # undo _fake's fixed name
+    monkeypatch.setattr(grade, "_OVERRIDE", {})
+    q = _package(tmp_path)
+    out = tmp_path / "out"
+    assert batch.main([str(q), "--out", str(out), "--figures", "text", "--k", "1",
+                       "--model", "gpt-4.1-nano"]) == 0
+    assert built == [("gpt-4.1-nano", False)]
+    report = json.loads((out / "Pkg" / "Exam A" / "Some question" / "gpt-4.1-nano" / "report.json")
+                        .read_text(encoding="utf-8"))
+    assert (report["model"], report["effort"], report["price"]) == ("gpt-4.1-nano", "none", list(batch.PRICES["gpt-4.1-nano"]))
+    assert len(calls) == 6
+    # The same answers on another model are new calls, not cache hits.
+    calls.clear()
+    assert batch.main([str(q), "--out", str(out), "--figures", "text", "--k", "1", "--model", "o4-mini"]) == 0
+    assert built[-1] == ("o4-mini", True) and len(calls) == 6
+    assert (out / "Pkg" / "Exam A" / "Some question" / "o4-mini-minimal" / "report.json").exists()
+    # A model of another profile (Orion: "@group/model") gets a short, profile-named folder.
+    calls.clear()
+    assert batch.main([str(q), "--out", str(out), "--figures", "text", "--k", "1", "--profile", "orion",
+                       "--model", "@vertex-general/gemini-2.5-flash"]) == 0
+    assert built[-1] == ("@vertex-general/gemini-2.5-flash", False, "orion") and len(calls) == 6
+    report = json.loads((out / "Pkg" / "Exam A" / "Some question" / "orion-gemini-2.5-flash" / "report.json")
+                        .read_text(encoding="utf-8"))
+    assert report["model"] == "@vertex-general/gemini-2.5-flash" and report["price"] == list(batch.PRICES["gemini-2.5-flash"])
 
 
 @needs_node

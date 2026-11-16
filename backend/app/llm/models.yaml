@@ -65,3 +65,18 @@ profiles:
       cheap: gpt-4o-mini
       mid: gpt-4o-mini
       strong: gpt-4o
+
+  # UCF's Orion AI Gateway (Portkey), OpenAI-compatible: the key goes as a Bearer token,
+  # models are named "@<provider group>/<model>". Through Portkey's public address only the
+  # @vertex-general (Google Gemini) group answers as of 2026-11-16; the Azure-backed groups
+  # need UCF's private gateway. Not used by the app unless LLM_PROFILE=orion (then set the
+  # ORION_MODEL_* tiers); the grader's batch command uses it with --profile orion --model.
+  orion:
+    provider: openai_compatible
+    base_url: https://api.portkey.ai/v1
+    api_key: env:ORION_API_KEY
+    timeout: 180
+    tiers:
+      cheap: env:ORION_MODEL_CHEAP
+      mid: env:ORION_MODEL_MID
+      strong: env:ORION_MODEL_STRONG

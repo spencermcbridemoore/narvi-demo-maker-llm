@@ -70,6 +70,26 @@ def get_model(role: Role, profile: str | None = None) -> BaseChatModel:
     profile = (profile or LLM_PROFILE).lower()
     cfg = _load_config()
     model_id, block = _resolve_model_id(cfg, profile, role)
+    return _build(model_id, block, profile)
+
+
+def get_model_named(model_id: str, reasoning: bool, profile: str | None = None) -> BaseChatModel:
+    """A model by its name under the active (or given) profile, outside the role tiers: on
+    Azure, any deployment of the same resource. Used to compare models (grader batch
+    --model). ``reasoning=False`` leaves out the profile's reasoning_effort, which
+    non-reasoning models (gpt-4.1, gpt-4o and most non-OpenAI models) reject."""
+    profile = (profile or LLM_PROFILE).lower()
+    block = dict(_load_config()["profiles"][profile])
+    if not reasoning:
+        block.pop("reasoning_effort", None)
+    elif "reasoning_effort" not in block:
+        block["reasoning_effort"] = "minimal"
+    # Non-OpenAI models served from the same Azure resource (Llama, DeepSeek, gpt-oss)
+    # also need the model named in the request body, not only in the URL.
+    return _build(model_id, block, profile, name_in_body=True)
+
+
+def _build(model_id: str, block: dict, profile: str, name_in_body: bool = False) -> BaseChatModel:
     provider = block["provider"]
     # temperature and reasoning_effort are opt-in per profile, sent ONLY when set:
     #  - GPT-5 / reasoning deployments reject a non-default temperature (400).
@@ -87,6 +107,8 @@ def get_model(role: Role, profile: str | None = None) -> BaseChatModel:
 
         # azure_endpoint / api_key / api_version fall back to env vars
         # (AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY, OPENAI_API_VERSION).
+        if name_in_body:
+            common["model"] = model_id
         return AzureChatOpenAI(azure_deployment=model_id, **common)
 
     if provider == "ollama":

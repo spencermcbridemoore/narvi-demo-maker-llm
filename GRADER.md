@@ -274,6 +274,17 @@ cd backend
   no answer text), a reasons CSV (the model's reasons and quotes), and `report.md` /
   `report.json` with agreement and kappa per item, which way it disagrees, tokens, cost
   and time. The grader's runs and cache go to `scratch/grading-runs/.grader`.
+- `--model <deployment>` grades with another deployment of the same Azure resource, to
+  compare models; its outputs go to a subfolder named after it. `--reasoning auto|yes|no`
+  says whether it takes a reasoning effort (auto: gpt-5*, gpt-6*, o-series do; gpt-4.1,
+  gpt-4o and open models do not). o4-mini and gpt-6 reject `minimal`: use `--effort low`.
+  Checked on made-up data (2026-11-15): the OpenAI models, Llama, DeepSeek and gpt-oss work;
+  Phi-4 and Mistral lack strict JSON output, and Claude needs Anthropic's own API.
+- `--profile orion --model @vertex-general/<model>` grades through UCF's Orion gateway
+  (Portkey, `ORION_API_KEY` in `.env`; the `orion` profile in `backend/app/llm/models.yaml`).
+  Through Portkey's public address only the Gemini (`@vertex-general`) models answer; the
+  Azure-backed groups need UCF's private gateway. Keys can have a usage limit: a run that
+  hits it fails fast ("Usage Limit Exceeded"), and its successful answers stay cached.
 
 ## Deploy (alongside DemoBuilder, same instance)
 
