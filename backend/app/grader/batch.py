@@ -51,20 +51,34 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..config import REPO_ROOT
-from . import figures, rubric, runner, store
+from . import figures, grade, rubric, runner, store
 from .adapters import NothingToLoad, _norm, read_rubric_yaml, yaml_kind
 from .agreement import num, pct, stats
 from .aggregate import needs_review
 from .grade import EFFORTS, PROMPT_VERSION, build_messages
 from .model import Assessment, Problem, Response
 
-# USD per 1M tokens: (input, cached input, output). List prices as of 2026; check your
-# Azure contract and pass --price to override.
+# USD per 1M tokens: (input, cached input, output), by model name (a dated name such as
+# gpt-4.1-mini-2025-04-14 counts as its model). List prices as of 2026; check your Azure
+# contract, and pass --price for a model not listed here (or a deployment named differently).
 PRICES = {
     "gpt-5": (1.25, 0.125, 10.0),
     "gpt-5-mini": (0.25, 0.025, 2.0),
     "gpt-5-nano": (0.05, 0.005, 0.40),
+    "gpt-4.1": (2.0, 0.50, 8.0),
+    "gpt-4.1-mini": (0.40, 0.10, 1.60),
+    "gpt-4.1-nano": (0.10, 0.025, 0.40),
+    "gpt-4o": (2.50, 1.25, 10.0),
+    "gpt-4o-mini": (0.15, 0.075, 0.60),
+    "o4-mini": (1.10, 0.275, 4.40),
+    "o3": (2.0, 0.50, 8.0),
+    "gemini-2.5-flash": (0.30, 0.03, 2.50),
+    "gemini-2.5-flash-lite": (0.10, 0.01, 0.40),
+    "gemini-2.5-pro": (1.25, 0.125, 10.0),
 }
+# Models that take a reasoning effort, when --reasoning is auto. Anything else (gpt-4.1,
+# gpt-4o, gpt-5-chat and most non-OpenAI models) is called without one.
+REASONING = re.compile(r"^(gpt-5(?!-chat)|gpt-6|o\d)", re.I)
 OUT_GUESS = 200          # output tokens per call assumed by --estimate before anything is measured
 PREPARE = REPO_ROOT / "frontend" / "scripts" / "prepare_explanations.mjs"
 
@@ -215,11 +229,9 @@ def _price(model: str, override: str | None) -> tuple[float, float, float] | Non
         if len(parts) == 2:
             return parts[0], parts[0], parts[1]     # no separate cached price: charge cached as input
         return parts[0], parts[1], parts[2]
-    m = model.lower()
-    if m in PRICES:
-        return PRICES[m]
-    keys = [k for k in PRICES if k in m]
-    return PRICES[max(keys, key=len)] if keys else None
+    # Exact names only (plus a date suffix): "gpt-5" must not price "gpt-5.4-mini".
+    m = re.sub(r"-\d{4}-\d{2}-\d{2}$", "", model.lower().rsplit("/", 1)[-1])   # "@group/model" -> model
+    return PRICES.get(m)
 
 
 def _cost(usage: dict, price) -> float | None:
@@ -519,7 +531,7 @@ def grade_question(q: Question, package: Path, pkg_name: str, out_root: Path, ar
         }
     result: dict = {
         "question": rel.as_posix(), "export": q.export.name, "rubric": q.rubric.name, "out": str(out),
-        "counts": counts, "figures": figure_note, "model": model, "effort": args.effort, "k": args.k,
+        "counts": counts, "figures": figure_note, "model": model, "effort": args.effort if grade.uses_reasoning() else "none", "k": args.k,
         "prompt_version": PROMPT_VERSION, "rubric_hash": run.rubric_hash, "run_id": run.id,
         "rows_mode": args.rows, "sample": args.sample, "seed": args.seed, "threshold": args.threshold,
         "calls": run.total_calls, "cached_calls": run.cached_calls, "failed_calls": run.failed_calls,
@@ -672,11 +684,27 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--estimate", action="store_true", help="count calls and cost; no model calls")
     ap.add_argument("--label", default="", help="write this run's outputs to a subfolder of the question's "
                     "output folder (e.g. effort-low), so runs with different settings sit side by side")
+    ap.add_argument("--model", default="", help="grade with this model instead of the grader's own: on Azure, "
+                    "the name of any deployment in the same resource (e.g. gpt-4.1-nano). Its outputs go to a "
+                    "subfolder named after it unless --label says otherwise")
+    ap.add_argument("--profile", default="", help="the model profile --model belongs to (models.yaml), "
+                    "e.g. orion for UCF's Orion gateway with --model @vertex-general/gemini-2.5-flash; "
+                    "default: the app's own (LLM_PROFILE)")
+    ap.add_argument("--reasoning", default="auto", choices=["auto", "yes", "no"],
+                    help="whether --model takes a reasoning effort (auto: gpt-5*, gpt-6*, o-series do)")
     args = ap.parse_args(argv)
 
     path = args.path.resolve()
     if not path.exists():
         ap.error(f"{path} does not exist")
+    if args.model:
+        reasoning = args.reasoning == "yes" or (args.reasoning == "auto" and bool(REASONING.match(args.model)))
+        grade.use_model(args.model, reasoning=reasoning, profile=args.profile or None)
+        if not args.label:
+            short = args.model.rsplit("/", 1)[-1]          # "@vertex-general/gemini-2.5-flash" -> gemini-2.5-flash
+            args.label = ((f"{args.profile}-" if args.profile else "") + re.sub(r"[^A-Za-z0-9._-]+", "-", short)
+                          + (f"-{args.effort}" if reasoning else ""))
+        say(f"model {args.model} ({'reasoning effort ' + args.effort if reasoning else 'no reasoning effort'})")
     os.environ.setdefault("GRADER_DATA_DIR", str(args.out.resolve() / ".grader"))
     if not args.estimate and not args.describe_figures:
         say(f"grader data and sample cache: {store.data_dir()}")

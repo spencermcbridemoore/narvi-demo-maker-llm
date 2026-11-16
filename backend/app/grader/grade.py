@@ -20,7 +20,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from ..llm.factory import Role, get_model
+from ..llm.factory import Role, get_model, get_model_named
 from .model import Criterion, Problem, Response, Sample
 
 # include_raw=True makes LangChain serialize a dict holding a pydantic object, which
@@ -89,10 +89,32 @@ def build_messages(problem: Problem, criterion: Criterion, response: Response) -
     return [("system", SYSTEM_TEMPLATE), ("human", user)]
 
 
+# Another model for this process only, instead of the grade role's: the batch command's
+# --model, to compare models. The web app never sets it.
+_OVERRIDE: dict = {}
+
+
+def use_model(name: str, reasoning: bool, profile: str | None = None) -> None:
+    """Grade with the model ``name`` for the rest of this process: on Azure a deployment of
+    the same resource, or a model of another profile (``orion``: "@group/model").
+    ``reasoning=False`` for models that reject reasoning_effort."""
+    _OVERRIDE.clear()
+    _OVERRIDE.update(name=name, reasoning=reasoning,
+                     model=get_model_named(name, reasoning=reasoning, profile=profile))
+    grading_model.cache_clear()
+
+
+def uses_reasoning() -> bool:
+    """Whether the grading model takes a reasoning effort."""
+    m = _OVERRIDE.get("model") or get_model(Role.GRADE)
+    return getattr(m, "reasoning_effort", None) is not None
+
+
 @lru_cache(maxsize=8)
 def grading_model(effort: str | None = None):
-    """The grade-role model, with reasoning effort overridden when the profile uses it."""
-    base = get_model(Role.GRADE)
+    """The grade-role model (or the batch command's choice), with reasoning effort
+    overridden when the model uses it."""
+    base = _OVERRIDE.get("model") or get_model(Role.GRADE)
     current = getattr(base, "reasoning_effort", None)
     if effort and current is not None and effort != current:
         return base.model_copy(update={"reasoning_effort": effort})
@@ -100,6 +122,8 @@ def grading_model(effort: str | None = None):
 
 
 def model_name() -> str:
+    if _OVERRIDE:
+        return _OVERRIDE["name"]
     m = get_model(Role.GRADE)
     return (getattr(m, "deployment_name", None) or getattr(m, "model_name", None)
             or getattr(m, "model", None) or type(m).__name__)
